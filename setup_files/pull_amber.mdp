@@ -1,0 +1,93 @@
+; Run parameters
+integrator           = md        ; leap-frog integrator
+nsteps               = 30000000 ; 0.002 * 30000000 = 60000 ps (60 ns)
+dt                   = 0.002     ; 2 fs
+continuation         = yes       ; Exact continuation from previous state
+gen-vel              = no        ; Velocity generation should be off after equilibration 
+
+; Output control
+nstxout              = 1000000   ; Bulky .trr file output frequency. saving every 2 ns 
+nstvout              = 1000000   ; Also output velocities
+nstfout              = 1000000   ; And forces
+nstenergy            = 50000    ; save energies every 100 ps
+nstlog               = 50000    ; update log file every 100 ps
+nstxout-compressed   = 50000    ; save compressed coordinates every 100 ps
+compressed-x-grps    = System    ; save the whole system
+
+; Bonded parameters
+constraint_algorithm = lincs     ; holonomic constraints 
+constraints          = h-bonds   ; bonds involving H are constrained
+lincs_iter           = 1         ; accuracy of LINCS
+lincs_order          = 4         ; also related to accuracy
+
+; Nonbonded parameters
+rcoulomb             = 1.0       ; short-range electrostatic cutoff (in nm)
+rvdw                 = 1.0       ; short-range van der Waals cutoff (in nm)
+coulombtype          = PME       ; How to compute coulomb interactions
+vdwtype              = Cut-off   ; How to compute vdw interactions
+vdw-modifier         = potential-shift    ; How the cutoff goes to 0 in vdw interactions
+DispCorr             = EnerPres  ; account for cut-off vdW scheme
+
+; PME settings
+pme-order            = 4         ; cubic interpolation
+fourierspacing       = 0.125     ; grid spacing for FFT
+
+; Cut-off settings
+cutoff-scheme        = Verlet    ; Buffered neighbor searching
+rlist                = 1.3       ; Cutoff distance for neighbor list
+nstlist              = 20        ; Neighbor list update frequency
+nsttcouple           = 100       ; Frequency of temperature coupling
+nstpcouple           = 100       ; Frequency of pressure coupling
+nstcomm              = 100       ; Frequency for center of mass removal
+comm_mode            = linear    ; How to remove center of mass
+comm_grps            = MEMB SOLV ; Remove center of mass independently for membrane/solvent
+
+; Temperature coupling
+tcoupl               = v-rescale         ; Stochastic velocity rescaling
+tc-grps              = MEMB SOLV         ; two coupling groups - more accurate
+tau_t                = 1    1            ; time constant, in ps
+ref_t                = 310  310          ; reference temperature, one for each group, in K
+
+; Pressure coupling is on
+pcoupl               = c-rescale         ; Stochastic cell rescaling
+pcoupltype           = semiisotropic     ; scale Z independent from XY
+tau_p                = 5.0               ; time constant, in ps
+compressibility      = 4.5e-5  4.5e-5    ; compressibility of the solvent
+ref_p                = 1.0     1.0       ; reference pressure, in bar
+
+; Periodic boundary conditions
+pbc                  = xyz       ; 3-D PBC
+
+; COM PULLING          
+pull                     = yes
+; Cylinder radius for dynamic reaction force groups (nm)
+pull-cylinder-r          = 0.9
+pull-constr-tol          = 1e-06
+pull-print-com           = no
+pull-print-ref-value     = no
+pull-print-components    = no
+pull-nstxout             = 1
+pull-nstfout             = 1
+; Number of pull groups 
+pull_ngroups             = 2
+; Number of pull coordinates
+pull_ncoords             = 1
+; Group and coordinate parameters
+pull-group1-name         = tail               ; Reference group: lipid tail atoms
+pull-group1-weights      = 
+pull-group1-pbcatom      = 0
+pull-group2-name         = ONP      ; Group for polar atom: Water and phosphate oxygen atom
+pull-group2-weights      = 
+pull-group2-pbcatom      = 0
+pull-coord1-type         = umbrella
+pull-coord1-potential-provider = 
+pull-coord1-geometry     = pore-slices         ; Use chain coordinate
+pull-coord1-groups       = 1 2
+pull-coord1-dim          = N N Y
+pull-coord1-origin       = 0.0 0.0 0.0
+pull-coord1-vec          = 0.0 0.0 0.0
+pull-coord1-start        = no
+pull-coord1-init         = 0.20                 ; Pulling from xi[chi] = 0.20
+pull-coord1-rate         = 0.000016             ; up to xi[ch] = 1.0 within 5000ps 
+pull-coord1-k            = 5000                ; Force constant, unit kJ/mol (not kJ/mol/nm2, since xi[ch] is unit-less)
+pull-coord1-kB           = 0

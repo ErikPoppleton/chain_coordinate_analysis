@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Data (large xvg trajectories/profiles)
+data/
+
+# Working directories
+topology_wrangling/

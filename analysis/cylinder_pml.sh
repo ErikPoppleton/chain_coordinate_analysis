@@ -2,9 +2,13 @@
 
 # Generate a Pymol command file to display the last cylinder for the current directory.
 #
-# Force field and lipid are taken from the working-directory name, which must be
-# "ff_lipid" (e.g. amber_DOPC) -- the same convention as setup_scripts/setup_pull.sh.
-# They can also be passed explicitly:  cylinder_pml.sh [ff] [lipid]
+# Force field and lipid come from the "ff_lipid" directory (e.g. amber_DOPC) --
+# the same convention as setup_scripts/setup_pull.sh.  On the cluster the run
+# directory sits several levels below it (umbrella windows, close replicates,
+# ...), so the path is walked upwards to find it rather than just reading the
+# parent directory name.  They can also be passed explicitly:
+#
+#     cylinder_pml.sh [ff] [lipid]
 #
 # The three force fields name things differently:
 #
@@ -22,8 +26,50 @@ set -e
 
 OUT="cyl_style.pml"
 
-LIPID=${2:-$(echo ${PWD##*/} | cut -d '_' -f2)}
-FF=${1:-$(echo ${PWD##*/} | cut -d '_' -f1)}
+# Top of the simulation tree; the "ff_lipid" directory always lives below it.
+SIM_ROOT="Simulations"
+
+is_ff() {
+    case "$1" in amber|charmm|slipids) return 0 ;; *) return 1 ;; esac
+}
+
+is_lipid() {
+    case "$1" in DOPC|DMPC|DMPG) return 0 ;; *) return 1 ;; esac
+}
+
+# Walk up from the working directory until a path component parses as
+# "ff_lipid", stopping at $SIM_ROOT.  Both halves have to be recognised, so a
+# directory that merely contains an underscore is not mistaken for the run name.
+find_ff_lipid_dir() {
+    local d="$PWD" base
+    while [ -n "$d" ] && [ "$d" != "/" ]; do
+        base=${d##*/}
+        [ "$base" = "$SIM_ROOT" ] && break   # walked past it without a match
+        if is_ff "$(echo "$base" | cut -d '_' -f1 | tr '[:upper:]' '[:lower:]')" &&
+           is_lipid "$(echo "$base" | cut -d '_' -f2 | tr '[:lower:]' '[:upper:]')"; then
+            echo "$base"
+            return 0
+        fi
+        d=${d%/*}
+    done
+    return 1
+}
+
+if [ -n "$1" ] && [ -n "$2" ]; then
+    FF=$1
+    LIPID=$2
+else
+    FF_LIPID_DIR=$(find_ff_lipid_dir) || {
+        echo "Could not find an 'ff_lipid' directory (e.g. amber_DOPC) in the path:"
+        echo "  $PWD"
+        echo "Expected one below a '${SIM_ROOT}' directory, or pass them explicitly:"
+        echo "  $(basename $0) <ff> <lipid>"
+        exit 1
+    }
+    FF=$(echo "$FF_LIPID_DIR" | cut -d '_' -f1)
+    LIPID=$(echo "$FF_LIPID_DIR" | cut -d '_' -f2)
+fi
+
 LIPID=$(echo $LIPID | tr '[:lower:]' '[:upper:]')
 FF=$(echo $FF | tr '[:upper:]' '[:lower:]')
 

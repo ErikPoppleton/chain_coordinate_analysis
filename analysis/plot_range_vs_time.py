@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """For every '*profile.xvg' file in the data/ folder, plot the amount of
 sampling that went into the PMF (in nanoseconds) against the max-min spread of
-the profile (its total energy range).
+the profile (its total energy range).  One pair of figures is produced per
+lipid (DOPC, DMPC, DMPG); lipids with no profile data are skipped.
 
 The sampling window of each profile is read straight from the `gmx wham`
 command line stored in the file header (`-b`/`-e`, in ps):
 
-    * <ff>_part{1..5}_profile.xvg   -b/-e give a 20 ns window
-    * <ff>_20-100_profile.xvg       -b 20000 (no -e)  -> 80 ns
-    * <ff>_profile.xvg              no -b/-e           -> full 100 ns
+    * <ff>_<lipid>_part{1..5}_profile.xvg  -b/-e give a 20 ns window
+    * <ff>_<lipid>_20-100_profile.xvg      -b 20000 (no -e)  -> 80 ns
+    * <ff>_<lipid>_profile.xvg             no -b/-e          -> full 100 ns
 
 Colours follow the other plotting scripts: CHARMM black, AMBER red,
 SLipids green.
@@ -20,17 +21,15 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
+from palette import FORCEFIELDS
+
 # Project layout: this script lives in analysis/, data in data/, output in plots/.
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
-# (force-field key as it appears in the filename prefix, label, colour).
-FORCEFIELDS = [
-    ("charmm", "CHARMM", "black"),
-    ("amber", "AMBER", "red"),
-    ("slipids", "SLipids", "green"),
-]
+# Lipids to plot; profiles are named "{ff}_{lipid}_..._profile.xvg".
+LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 
 def load_y(path):
@@ -75,7 +74,7 @@ def force_field(fname):
     return None
 
 
-def scatter_plot(points, xlabel, outfile):
+def scatter_plot(points, xlabel, title, outfile):
     """points: list of (x, spread, label, color, size).  Scatter, one legend
     entry per force field, in the shared colour scheme."""
     plt.figure(figsize=(6, 5))
@@ -87,6 +86,7 @@ def scatter_plot(points, xlabel, outfile):
                     s=size, edgecolors="white", linewidths=0.5, zorder=3)
     plt.xlabel(xlabel)
     plt.ylabel(r"PMF range, max $-$ min (kJ mol$^{-1}$)")
+    plt.title(title)
     # Force a small, uniform marker in the legend regardless of the plotted
     # point sizes (which scale with sampling time in the start-time plot).
     leg = plt.legend()
@@ -95,11 +95,16 @@ def scatter_plot(points, xlabel, outfile):
     plt.tight_layout()
     outpath = PLOTS / outfile
     plt.savefig(outpath, dpi=300)
+    plt.close()
     print(f"wrote {outpath}")
 
 
-def main():
-    files = sorted(DATA.glob("*profile.xvg"))
+def plot_lipid(lipid):
+    """Build the range-vs-time and range-vs-starttime scatters for one lipid."""
+    files = sorted(DATA.glob(f"*_{lipid}_*profile.xvg"))
+    if not files:
+        print(f"skipped {lipid}: no profile data")
+        return
 
     # Full-trajectory profiles carry no -e; use the largest -e found anywhere
     # (the parts run to 100000 ps) as the full-trajectory end time.
@@ -120,8 +125,22 @@ def main():
         # In the start-time plot, marker area scales with the ns of sampling.
         start_pts.append((start_ns(fname), spread, label, color, 4 * duration))
 
-    scatter_plot(duration_pts, "Sampling per profile (ns)", "range_vs_time.png")
-    scatter_plot(start_pts, "Start time, -b (ns)", "range_vs_starttime.png")
+    # Plot (and thus legend) in FORCEFIELDS order (CHARMM, AMBER, SLipids) to
+    # match the other scripts; the glob above is alphabetical.  Stable sort, so
+    # files within one force field keep their order.
+    ff_rank = {label: i for i, (_key, label, _color) in enumerate(FORCEFIELDS)}
+    duration_pts.sort(key=lambda p: ff_rank[p[2]])
+    start_pts.sort(key=lambda p: ff_rank[p[2]])
+
+    scatter_plot(duration_pts, "Sampling per profile (ns)", lipid,
+                 f"range_vs_time_{lipid}.png")
+    scatter_plot(start_pts, "Start time, -b (ns)", lipid,
+                 f"range_vs_starttime_{lipid}.png")
+
+
+def main():
+    for lipid in LIPIDS:
+        plot_lipid(lipid)
 
 
 if __name__ == "__main__":

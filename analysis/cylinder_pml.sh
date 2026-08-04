@@ -94,14 +94,26 @@ case $FF in
         # The +/- in the AMBER ion names are selection-list characters to Pymol
         # and have to be backslash-escaped (quoting them does not work).
         IONS='resn Na\+ or resn Cl\- or resn MG or resn CA'
+        ION_COLORS='color sodium, resn Na\+
+color chlorine, resn Cl\-
+color magnesium, resn MG
+color calcium, resn CA'
         ;;
     charmm)
         WATER="TIP3"
         IONS='resn SOD or resn CLA or resn MG or resn CAL'
+        ION_COLORS='color sodium, resn SOD
+color chlorine, resn CLA
+color magnesium, resn MG
+color calcium, resn CAL'
         ;;
     slipids)
         WATER="SOL"
         IONS='resn NA or resn CL or resn MG or resn CA'
+        ION_COLORS='color sodium, resn NA
+color chlorine, resn CL
+color magnesium, resn MG
+color calcium, resn CA'
         ;;
 esac
 
@@ -144,8 +156,19 @@ hide everything, tail_atoms
 delete tail_atoms
 
 # Water and ions (${FF} naming).
-show nb_spheres, resn ${WATER}
+# "hide everything" first because Pymol's automatic styling on load is not the
+# same for every water name (TP3 comes up as spheres, TIP3/SOL as lines), and
+# nb_spheres is no good here: it only draws atoms with no bonds, and Pymol
+# infers the O-H bonds when it reads the .gro.
+hide everything, resn ${WATER}
+show spheres, resn ${WATER}
 show spheres, ${IONS}
+
+# Colour the ions explicitly.  Pymol infers the element from the atom name (a
+# .gro carries no element column) and gets several of these wrong, differently
+# per force field: CHARMM SOD comes out sulfur-yellow and CAL green, AMBER Na+
+# comes out white.  Without this the same ion changes colour between figures.
+${ION_COLORS}
 EOF
 
 echo "wrote ${OUT} (${FF}, ${LIPID})"

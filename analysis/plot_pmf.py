@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
-"""Plot PMF profiles from three xmgrace (.xvg) files, each shifted so that
-its energy is zero at the collective-variable value x = 0.2."""
+"""Plot PMF profiles for each lipid.  Per lipid, the three force fields
+(CHARMM, AMBER, SLipids) are overlaid, each shifted so that its minimum energy
+is zero."""
 
 from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
 
+from palette import FORCEFIELDS
+
 # Project layout: this script lives in analysis/, data in data/, output in plots/.
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
-# (filename, label, color)
-DATASETS = [
-    ("charmm_profile.xvg", "CHARMM", "black"),
-    ("amber_profile.xvg", "AMBER", "red"),
-    ("slipids_profile.xvg", "SLipids", "green"),
-]
-
-SHIFT_X = 0.2  # x-value at which each curve is set to y = 0
+# Lipids to plot; profiles are named "{ff}_{lipid}_profile.xvg".  A lipid with
+# no profile files (only pullx trajectories) is skipped.
+LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 # Each full profile is accompanied by five partial profiles computed from
 # consecutive 20 ns windows (0-20, 20-40, 40-60, 60-80, 80-100 ns).  They
-# share the full profile's basename, e.g. "charmm_profile.xvg" ->
-# "charmm_part1_profile.xvg" ... "charmm_part5_profile.xvg".
+# share the full profile's basename, e.g. "charmm_DMPC_profile.xvg" ->
+# "charmm_DMPC_part1_profile.xvg" ... "charmm_DMPC_part5_profile.xvg".
 N_PARTS = 5
 
 
@@ -43,31 +41,56 @@ def load_xvg(path):
     return np.array(x), np.array(y)
 
 
-def main():
-    plt.figure(figsize=(6, 5))
+def plot_lipid(lipid):
+    """Overlay the CHARMM/AMBER/SLipids PMF profiles for one lipid.  Returns
+    True if a figure was produced, False if the lipid has no profile data."""
+    fig = plt.figure(figsize=(6, 5))
+    plotted = False
 
-    for fname, label, color in DATASETS:
+    for key, label, color in FORCEFIELDS:
+        fname = f"{key}_{lipid}_profile.xvg"
+        path = DATA / fname
+        if not path.exists():
+            continue
+        plotted = True
+
         # Partial profiles first, so they render behind the full curve.
-        prefix = fname[: -len("_profile.xvg")]
         for part in range(1, N_PARTS + 1):
-            part_fname = f"{prefix}_part{part}_profile.xvg"
-            px, py = load_xvg(DATA / part_fname)
-            pidx = np.argmin(np.abs(px - SHIFT_X))
-            plt.plot(px, py - py[pidx], color=color, lw=0.5, alpha=0.3)
+            part_path = DATA / f"{key}_{lipid}_part{part}_profile.xvg"
+            if not part_path.exists():
+                continue
+            px, py = load_xvg(part_path)
+            plt.plot(px, py - py.min(), color=color, lw=0.5, alpha=0.3)
 
-        x, y = load_xvg(DATA / fname)
-        # Shift so y == 0 at the point nearest to x = SHIFT_X
-        idx = np.argmin(np.abs(x - SHIFT_X))
-        y_shifted = y - y[idx]
-        plt.plot(x, y_shifted, color=color, label=label)
+        x, y = load_xvg(path)
+        # Shift so the curve's minimum sits at y == 0
+        plt.plot(x, y - y.min(), color=color, label=label)
 
-    plt.axhline(0.0, color="gray", lw=0.5, ls="--")
-    plt.xlabel(r"$\xi$")
-    plt.ylabel(r"PMF (kJ mol$^{-1}$)")
-    plt.legend()
+    if not plotted:
+        plt.close(fig)
+        print(f"skipped {lipid}: no profile data")
+        return False
+
+    ax = plt.gca()
+    ax.axhline(0.0, color="gray", lw=0.5, ls="--")
+    ax.set_xlim(0.0, 1.0)
+    # Mirror the y-axis ticks onto the right spine.
+    ax.tick_params(axis="y", right=True)
+    ax.set_xlabel(r"$\xi$")
+    ax.set_ylabel(r"PMF (kJ mol$^{-1}$)")
+    ax.set_title(lipid)
+    ax.legend()
     plt.tight_layout()
-    plt.savefig(PLOTS / "pmf_profiles.png", dpi=300)
-    plt.show()
+    outpath = PLOTS / f"pmf_profiles_{lipid}.png"
+    plt.savefig(outpath, dpi=300)
+    plt.close(fig)
+    print(f"wrote {outpath}")
+    return True
+
+
+def main():
+    for lipid in LIPIDS:
+        plot_lipid(lipid)
 
 
 if __name__ == "__main__":

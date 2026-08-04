@@ -130,8 +130,12 @@ def plot_lateral_diffusion():
             bar_e.append(np.std(D) if D.size > 1 else 0.0)
             bar_c.append(color)
         if bar_x:
-            # Only draw the inset for panels that actually have data.
-            inset = ax.inset_axes([0.12, 0.55, 0.42, 0.4])
+            # Only draw the inset for panels that actually have data.  Bottom-right,
+            # in the open space below the diffusive MSD curve, with a transparent
+            # background and no top/right spines so it doesn't box off the data.
+            inset = ax.inset_axes([0.56, 0.12, 0.4, 0.38])
+            inset.patch.set_alpha(0.0)
+            inset.spines[["top", "right"]].set_visible(False)
             inset.bar(bar_x, bar_h, yerr=bar_e, color=bar_c, capsize=2, width=0.7)
             inset.set_xticks(bar_x)
             inset.set_xticklabels([FORCEFIELDS[i][0].upper()[:1] for i in bar_x],

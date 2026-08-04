@@ -44,6 +44,7 @@ for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXP
 
 import numpy as np
 import MDAnalysis as mda
+from MDAnalysis.transformations import NoJump
 from lipyphilic import AssignLeaflets
 from lipyphilic.analysis.area_per_lipid import AreaPerLipid
 from lipyphilic.analysis.registration import Registration
@@ -140,6 +141,12 @@ def analyse(u, ff, lipid):
         chain.run()
         scc_samples.append(np.asarray(chain.SCC).ravel())
 
+    # MSD needs unwrapped coordinates -- lipyphilic assumes no PBC jumps, and a
+    # wrapped trajectory turns every boundary crossing into a ~box-length jump
+    # that massively inflates the MSD.  Add NoJump now, after the four analyses
+    # above (which need in-box coordinates for their PBC-aware leaflet/Voronoi
+    # logic); MSD is the last analysis so they are unaffected.
+    u.trajectory.add_transformations(NoJump())
     msd = MSD(u, lipid_sel=PHOSPHATE, com_removal_sel=PHOSPHATE)
     msd.run()
     D, Dsem = msd.diffusion_coefficient()

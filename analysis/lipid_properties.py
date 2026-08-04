@@ -5,7 +5,7 @@ force-field / lipid / replicate, and save plot-ready arrays as .npz.
 This is the *analysis* half of the pipeline; styling lives in the separate
 ``plot_lipid_properties.py`` so the (slow) analysis need only run once.
 
-Run cluster-side in the ``lipid64`` conda environment, which has lipyphilic +
+Run cluster-side in the ``lipid`` conda environment, which has lipyphilic +
 MDAnalysis installed::
 
     conda run -n lipid64 python analysis/lipid_properties.py
@@ -13,12 +13,12 @@ MDAnalysis installed::
 Input layout (identical on the local box and the cluster)::
 
     ~/Simulations/{ff}_{lipid}/eq{1,2,3}/md.tpr        topology
-    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/*.xtc         trajectory
+    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/md.xtc        trajectory (--traj to override)
+    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/md.gro        last-frame topology fallback
 
 The GROMACS 2026.3 ``.tpr`` files are too new for MDAnalysis's TPR parser, so
-if MDAnalysis can't read ``md.tpr`` directly the script converts it to a
-``.gro`` once via ``gmx editconf`` (set ``$GMX`` if the binary isn't ``gmx``).
-That step needs GROMACS >= the version that wrote the tpr on PATH.
+if MDAnalysis can't read ``md.tpr`` directly the script falls back to the
+last-configuration ``md.gro`` that every run directory contains.
 
 Properties (all via lipyphilic), one .npz written to ``data/`` per property:
   * area_per_lipid   -- AreaPerLipid, per-lipid-per-frame samples (A^2)
@@ -33,9 +33,14 @@ stores the MSD-vs-lagtime curve and the fitted D per replicate instead.
 
 import argparse
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+# The lipyphilic analyses are numpy-light and only run serially, so pin BLAS to
+# one thread (before numpy imports) to keep --nprocs workers from oversubscribing
+# cores.  Override by exporting OMP_NUM_THREADS etc. yourself.
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
 
 import numpy as np
 import MDAnalysis as mda
@@ -58,13 +63,11 @@ REPLICATES = [1, 2, 3]
 # assignment, area-per-lipid, thickness, registration and the MSD reference.
 PHOSPHATE = "name P P31"
 
-# Acyl tails carry twice as many carbons in DOPC (18:1) as in DMPC/DMPG (14:0).
+# Carbons per acyl tail: DOPC is oleoyl (18:1), DMPC/DMPG are myristoyl (14:0).
 TAIL_NC = {"DOPC": 18, "DMPC": 14, "DMPG": 14}
 # AMBER splits each lipid into a head residue + two tail residues; the tail
 # resname is the acyl species.
 AMBER_TAIL_RESN = {"DOPC": "OL", "DMPC": "MY", "DMPG": "MY"}
-
-GMX = os.environ.get("GMX", "gmx")
 
 
 def tail_selections(ff, lipid):
@@ -83,54 +86,19 @@ def tail_selections(ff, lipid):
     return [f"resname {AMBER_TAIL_RESN[lipid]} and name C1*"]
 
 
-def pick_trajectory(run_dir, explicit=None):
-    """Choose the production trajectory in ``run_dir``.  With ``explicit`` set,
-    use that filename; otherwise pick the ``.xtc`` with the most frames (so the
-    50-frame test trajectory and a 1200-frame production run both work)."""
-    if explicit:
-        p = run_dir / explicit
-        return p if p.exists() else None
-    xtcs = sorted(run_dir.glob("*.xtc"))
-    if not xtcs:
-        return None
-    if len(xtcs) == 1:
-        return xtcs[0]
-    best, best_n = None, -1
-    for x in xtcs:
-        try:
-            n = len(mda.coordinates.XTC.XTCReader(str(x)))
-        except Exception:
-            n = -1
-        if n > best_n:
-            best, best_n = x, n
-    print(f"    multiple .xtc found, using {best.name} ({best_n} frames)")
-    return best
-
-
 def build_universe(run_dir, traj):
     """Universe for ``run_dir``, coping with too-new .tpr files.
 
-    Tries ``md.tpr`` directly; on failure reuses/creates a ``.gro`` (via
-    ``gmx editconf``) as a topology MDAnalysis can read."""
+    Tries ``md.tpr`` directly; on failure falls back to the last-configuration
+    ``md.gro``, which every run directory always contains and which MDAnalysis
+    can read regardless of GROMACS version."""
     tpr = run_dir / "md.tpr"
     if tpr.exists():
         try:
             return mda.Universe(str(tpr), str(traj))
         except Exception as exc:  # tpx version too new for MDAnalysis, etc.
-            print(f"    tpr unreadable by MDAnalysis ({str(exc)[:50]}...); using .gro")
-    # Reuse an existing structure file if present, else generate one from the tpr.
-    gro = run_dir / "mda_structure.gro"
-    if not gro.exists():
-        existing = sorted(run_dir.glob("*.gro"))
-        if existing:
-            gro = existing[0]
-        else:
-            print(f"    running {GMX} editconf to make {gro.name}")
-            subprocess.run(
-                [GMX, "editconf", "-f", str(tpr), "-o", str(gro)],
-                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-    return mda.Universe(str(gro), str(traj))
+            print(f"    tpr unreadable by MDAnalysis ({str(exc)[:50]}...); using md.gro")
+    return mda.Universe(str(run_dir / "md.gro"), str(traj))
 
 
 def analyse(u, ff, lipid):
@@ -182,6 +150,15 @@ def analyse(u, ff, lipid):
 SAMPLE_PROPS = ["area_per_lipid", "memb_thickness", "registration", "order_parameter"]
 
 
+def run_one(job):
+    """Analyse a single trajectory.  Top-level (picklable) so it can be farmed
+    out to a process pool.  Returns ``(ff, lipid, rep, result_dict)``."""
+    ff, lipid, rep, run_dir, traj = job
+    print(f"analysing {ff}_{lipid} eq{rep}  ({traj.name})", flush=True)
+    u = build_universe(run_dir, traj)
+    return ff, lipid, rep, analyse(u, ff, lipid)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -189,62 +166,77 @@ def main():
     ap.add_argument("--forcefields", nargs="+", default=FORCEFIELDS)
     ap.add_argument("--lipids", nargs="+", default=LIPIDS)
     ap.add_argument("--reps", nargs="+", type=int, default=REPLICATES)
-    ap.add_argument("--traj", default=None,
-                    help="explicit trajectory filename inside each eq dir "
-                         "(default: the .xtc with the most frames)")
+    ap.add_argument("--traj", default="md.xtc",
+                    help="trajectory filename inside each eq dir (default: md.xtc)")
+    ap.add_argument("--nprocs", type=int, default=1,
+                    help="analyse this many trajectories in parallel, one core "
+                         "each (the analyses themselves are serial-only). "
+                         "Capped at the number of trajectories found.")
     ap.add_argument("--out", type=Path, default=DATA)
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
-    # Accumulate: results[prop][f"{ff}_{lipid}"] -> list of per-replicate arrays.
-    results = {p: {} for p in SAMPLE_PROPS}
-    diffusion = {}  # f"{ff}_{lipid}" -> dict of lists
-
+    # Build the (existence-checked) list of independent trajectory jobs.
+    jobs = []
     for ff in args.forcefields:
         for lipid in args.lipids:
-            system = f"{ff}_{lipid}"
             for rep in args.reps:
-                run_dir = args.sims_root / system / f"eq{rep}"
+                run_dir = args.sims_root / f"{ff}_{lipid}" / f"eq{rep}"
                 if not run_dir.is_dir():
-                    print(f"skip {system} eq{rep}: {run_dir} not found")
+                    print(f"skip {ff}_{lipid} eq{rep}: {run_dir} not found")
                     continue
-                traj = pick_trajectory(run_dir, args.traj)
-                if traj is None:
-                    print(f"skip {system} eq{rep}: no trajectory")
+                traj = run_dir / args.traj
+                if not traj.exists():
+                    print(f"skip {ff}_{lipid} eq{rep}: {traj.name} not found")
                     continue
-                print(f"analysing {system} eq{rep}  ({traj.name})")
-                u = build_universe(run_dir, traj)
-                res = analyse(u, ff, lipid)
+                jobs.append((ff, lipid, rep, run_dir, traj))
 
-                for p in SAMPLE_PROPS:
-                    results[p].setdefault(system, []).append(res[p])
-                d = diffusion.setdefault(
-                    system, {"lagtimes": [], "msd": [], "D": [], "Dsem": []})
-                d["lagtimes"].append(res["msd_lagtimes"])
-                d["msd"].append(res["msd_curve"])
-                d["D"].append(res["D"])
-                d["Dsem"].append(res["Dsem"])
+    if not jobs:
+        print("no trajectories found; nothing to do")
+        return
+
+    # Each job is single-core and independent, so parallelise over trajectories.
+    nprocs = max(1, min(args.nprocs, len(jobs)))
+    print(f"{len(jobs)} trajectories, {nprocs} worker(s)")
+    if nprocs == 1:
+        completed = [run_one(j) for j in jobs]
+    else:
+        import multiprocessing as mp
+        with mp.Pool(nprocs) as pool:
+            completed = list(pool.imap_unordered(run_one, jobs))
+
+    # Regroup by system, keyed by replicate so out-of-order completion is fine.
+    results = {p: {} for p in SAMPLE_PROPS}  # prop -> system -> {rep: array}
+    diffusion = {}                           # system -> {rep: result_dict}
+    for ff, lipid, rep, res in completed:
+        system = f"{ff}_{lipid}"
+        for p in SAMPLE_PROPS:
+            results[p].setdefault(system, {})[rep] = res[p]
+        diffusion.setdefault(system, {})[rep] = res
 
     # ---- write sample-based properties: pooled + per-replicate ----
     for p in SAMPLE_PROPS:
         out = {}
-        for system, reps in results[p].items():
-            out[system] = np.concatenate(reps)
-            for i, arr in enumerate(reps, start=1):
-                out[f"{system}_eq{i}"] = arr
+        for system, by_rep in results[p].items():
+            reps = sorted(by_rep)
+            out[system] = np.concatenate([by_rep[r] for r in reps])
+            for r in reps:
+                out[f"{system}_eq{r}"] = by_rep[r]
         path = args.out / f"lipprops_{p}.npz"
         np.savez_compressed(path, **out)
         print(f"wrote {path}  ({len(results[p])} systems)")
 
     # ---- write lateral diffusion: MSD curve + fitted D per replicate ----
     out = {}
-    for system, d in diffusion.items():
+    for system, by_rep in diffusion.items():
+        reps = sorted(by_rep)
+        msds = [by_rep[r]["msd_curve"] for r in reps]
         # Replicates share dt but may differ in length; truncate to the common min.
-        nlag = min(len(x) for x in d["msd"])
-        out[f"{system}_lagtimes"] = d["lagtimes"][0][:nlag]
-        out[f"{system}_msd"] = np.vstack([m[:nlag] for m in d["msd"]])
-        out[f"{system}_D"] = np.asarray(d["D"])
-        out[f"{system}_Dsem"] = np.asarray(d["Dsem"])
+        nlag = min(len(m) for m in msds)
+        out[f"{system}_lagtimes"] = by_rep[reps[0]]["msd_lagtimes"][:nlag]
+        out[f"{system}_msd"] = np.vstack([m[:nlag] for m in msds])
+        out[f"{system}_D"] = np.asarray([by_rep[r]["D"] for r in reps])
+        out[f"{system}_Dsem"] = np.asarray([by_rep[r]["Dsem"] for r in reps])
     path = args.out / "lipprops_lateral_diffusion.npz"
     np.savez_compressed(path, **out)
     print(f"wrote {path}  ({len(diffusion)} systems)")

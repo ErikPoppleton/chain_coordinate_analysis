@@ -118,16 +118,26 @@ def analyse(u, ff, lipid):
     reg.run()
 
     # Order parameter: pool every acyl chain (both tails) into one sample set.
+    # lipyphilic's SCC groups tail atoms by residue and needs a uniform carbon
+    # count per residue.  If a topology gives a lipid's two tails the same resid
+    # (as GROMACS does for AMBER Lipid17), MDAnalysis merges them into one lumpy
+    # residue and SCC dies with an opaque reshape error -- so check up front.
+    n_expected = TAIL_NC[lipid] - 1  # carbons per chain feeding into S_CC
     scc_samples = []
     for sel in tail_selections(ff, lipid):
-        n_expected = TAIL_NC[lipid] - 1  # carbons per chain feeding into S_CC
+        tail = u.select_atoms(sel)
+        _, counts = np.unique(tail.resindices, return_counts=True)
+        if not np.all(counts == n_expected):
+            raise ValueError(
+                f"{ff} {lipid}: acyl-chain selection yields "
+                f"{sorted(set(int(c) for c in counts))} carbons per residue, "
+                f"expected {n_expected}. A lipid's two tails "
+                f"are sharing a residue id (GROMACS numbers them identically), so "
+                f"MDAnalysis merges them and SCC can't run.  Renumber md.gro so "
+                f"every tail is its own residue first."
+            )
         chain = SCC(u, tail_sel=sel)
         chain.run()
-        per_chain_carbons = u.select_atoms(sel).n_atoms / chain.SCC.shape[0]
-        if abs(per_chain_carbons - n_expected) > 1.5:
-            print(f"    WARNING: {ff} {lipid} SCC sees {per_chain_carbons:.1f} "
-                  f"carbons/chain, expected ~{n_expected} -- tails may be merged "
-                  f"into one residue; check topology resids.")
         scc_samples.append(np.asarray(chain.SCC).ravel())
 
     msd = MSD(u, lipid_sel=PHOSPHATE, com_removal_sel=PHOSPHATE)

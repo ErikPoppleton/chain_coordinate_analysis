@@ -114,10 +114,15 @@ def plot_lateral_diffusion():
             lag = data[lag_key]
             msd = data[msd_key]  # (n_reps, n_lag)
             mean = msd.mean(axis=0)
+            # Drop the lag = 0 / MSD = 0 point, undefined on a log-log plot.
+            nz = lag > 0
+            lag, mean, msd = lag[nz], mean[nz], msd[:, nz]
             ax.plot(lag, mean, color=color, lw=1.8, label=label)
             if msd.shape[0] > 1:
                 sd = msd.std(axis=0)
-                ax.fill_between(lag, mean - sd, mean + sd, color=color, alpha=0.2, lw=0)
+                # Clip the lower band to stay positive for the log y-axis.
+                lo = np.clip(mean - sd, 1e-6, None)
+                ax.fill_between(lag, lo, mean + sd, color=color, alpha=0.2, lw=0)
 
             D = data[f"{ff}_{lipid}_D"] * 1e7  # -> 10^-7 cm^2/s
             bar_x.append(i)
@@ -135,6 +140,8 @@ def plot_lateral_diffusion():
             inset.set_title(r"$D$ ($10^{-7}\,\mathrm{cm^2/s}$)", fontsize=7)
         ax.set_title(lipid)
         ax.set_xlabel("lag time (ns)")
+        ax.set_xscale("log")
+        ax.set_yscale("log")
         ax.tick_params(axis="y", right=True)
     axes[0].set_ylabel(r"MSD ($\mathrm{nm}^2$)")
     if not any_data:

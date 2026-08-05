@@ -13,7 +13,7 @@ MDAnalysis installed::
 Input layout (identical on the local box and the cluster)::
 
     ~/Simulations/{ff}_{lipid}/eq{1,2,3}/md.tpr        topology
-    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/md.xtc        trajectory (--traj to override)
+    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/inbox.xtc     trajectory (--traj to override)
     ~/Simulations/{ff}_{lipid}/eq{1,2,3}/md.gro        last-frame topology fallback
 
 The GROMACS 2026.3 ``.tpr`` files are too new for MDAnalysis's TPR parser, so
@@ -210,8 +210,8 @@ def main():
     ap.add_argument("--forcefields", nargs="+", default=FORCEFIELDS)
     ap.add_argument("--lipids", nargs="+", default=LIPIDS)
     ap.add_argument("--reps", nargs="+", type=int, default=REPLICATES)
-    ap.add_argument("--traj", default="md.xtc",
-                    help="trajectory filename inside each eq dir (default: md.xtc)")
+    ap.add_argument("--traj", default="inbox.xtc",
+                    help="trajectory filename inside each eq dir (default: inbox.xtc)")
     ap.add_argument("--nprocs", type=int, default=1,
                     help="analyse this many trajectories in parallel, one core "
                          "each (the analyses themselves are serial-only). "

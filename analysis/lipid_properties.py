@@ -20,15 +20,17 @@ The GROMACS 2026.3 ``.tpr`` files are too new for MDAnalysis's TPR parser, so
 if MDAnalysis can't read ``md.tpr`` directly the script falls back to the
 last-configuration ``md.gro`` that every run directory contains.
 
-Properties (all via lipyphilic), one .npz written to ``data/`` per property:
+Properties, one .npz written to ``data/`` per property:
   * area_per_lipid   -- AreaPerLipid, per-lipid-per-frame samples (A^2)
   * memb_thickness   -- MembThickness, per-frame samples (A)
   * registration     -- Registration, per-frame samples (correlation coeff.)
-  * order_parameter  -- SCC, per-acyl-chain-per-frame samples (S_CC)
+  * order_parameter  -- full per-carbon S_CC for every chain and frame
   * lateral_diffusion-- MSD curve (vs lag time) + fitted diffusion coefficient
 
-The first four are histogram-ready pooled sample arrays; lateral_diffusion
-stores the MSD-vs-lagtime curve and the fitted D per replicate instead.
+The first three are histogram-ready pooled sample arrays.  order_parameter
+stores the full per-carbon S_CC array per replicate (large -- ~100 MB -- with
+the per-carbon averaging left to the plotting script), and lateral_diffusion
+stores the MSD-vs-lagtime curve and the fitted D per replicate.
 """
 
 import argparse
@@ -48,7 +50,6 @@ from MDAnalysis.transformations import NoJump
 from lipyphilic import AssignLeaflets
 from lipyphilic.analysis.area_per_lipid import AreaPerLipid
 from lipyphilic.analysis.registration import Registration
-from lipyphilic.analysis.order_parameter import SCC
 from lipyphilic.analysis.memb_thickness import MembThickness
 from lipyphilic.analysis.lateral_diffusion import MSD
 
@@ -76,8 +77,8 @@ def tail_selections(ff, lipid):
 
     CHARMM/SLipids keep both tails in one residue, so the sn-1 (C2x) and sn-2
     (C3x) chains are separated by atom name.  AMBER puts each tail in its own
-    residue, so a single ``resname`` selection yields both chains (lipyphilic's
-    SCC then treats each residue as an independent chain)."""
+    residue, so a single ``resname`` selection yields both chains (scc_profile
+    then treats each residue as an independent chain)."""
     n = TAIL_NC[lipid]
     if ff in ("charmm", "slipids"):
         sn1 = f"resname {lipid} and name " + " ".join(f"C2{i}" for i in range(2, n + 1))
@@ -85,6 +86,48 @@ def tail_selections(ff, lipid):
         return [sn1, sn2]
     # amber
     return [f"resname {AMBER_TAIL_RESN[lipid]} and name C1*"]
+
+
+def scc_samples(u, ff, lipid):
+    """Per-carbon S_CC for every acyl chain at every frame of this trajectory.
+
+    Returns ``(carbons, data)`` where ``carbons`` are the acyl carbon numbers and
+    ``data`` has shape ``(n_chain_frames, n_carbons)`` -- the full distribution,
+    pooled over both tails (rows are one chain at one frame).  S_CC of each C-C
+    bond is ½⟨3cos²θ−1⟩ with the bilayer normal along z (lipyphilic's default);
+    the plotting script averages over the sample axis to get the profile, and
+    averaging that profile over carbons reproduces lipyphilic's per-chain SCC.
+
+    The full array is large (this is the ~100 MB file), but keeping every sample
+    lets the styling stage choose how to reduce it."""
+    n = TAIL_NC[lipid]
+    n_carbons = n - 1                    # tail carbons in the selection (acyl 2..n)
+    carbons = np.arange(2, n)            # acyl number of each bond's first carbon
+    blocks = []
+    for sel in tail_selections(ff, lipid):
+        tail = u.select_atoms(sel)
+        _, counts = np.unique(tail.resindices, return_counts=True)
+        if not np.all(counts == n_carbons):
+            raise ValueError(
+                f"{ff} {lipid}: acyl-chain selection yields "
+                f"{sorted(set(int(c) for c in counts))} carbons per residue, "
+                f"expected {n_carbons}. A lipid's two tails are sharing a residue "
+                f"id (GROMACS numbers them identically), so MDAnalysis merges "
+                f"them.  Renumber md.gro so every tail is its own residue first."
+            )
+        m = tail.n_residues
+        # Order carbons within each residue by acyl number so CHARMM (ascending in
+        # the topology) and AMBER (descending) give the same head->tail profile.
+        acyl = np.array([int(name[2:]) for name in tail.names])
+        order = np.lexsort((acyl, tail.resindices))
+        for ts in u.trajectory:
+            pos = tail.positions[order].reshape(m, n_carbons, 3)
+            cc = np.diff(pos, axis=1)                 # C-C bond vectors
+            box = ts.dimensions[:3]
+            cc -= box * np.round(cc / box)            # minimum image (intramolecular)
+            cos = cc[:, :, 2] / np.linalg.norm(cc, axis=2)
+            blocks.append(0.5 * (3 * cos**2 - 1))     # (m chains, n_carbons)
+    return carbons, np.vstack(blocks)                 # (n_chain_frames, n_carbons)
 
 
 def build_universe(run_dir, traj):
@@ -118,28 +161,10 @@ def analyse(u, ff, lipid):
                        leaflets=leaflets.leaflets)
     reg.run()
 
-    # Order parameter: pool every acyl chain (both tails) into one sample set.
-    # lipyphilic's SCC groups tail atoms by residue and needs a uniform carbon
-    # count per residue.  If a topology gives a lipid's two tails the same resid
-    # (as GROMACS does for AMBER Lipid17), MDAnalysis merges them into one lumpy
-    # residue and SCC dies with an opaque reshape error -- so check up front.
-    n_expected = TAIL_NC[lipid] - 1  # carbons per chain feeding into S_CC
-    scc_samples = []
-    for sel in tail_selections(ff, lipid):
-        tail = u.select_atoms(sel)
-        _, counts = np.unique(tail.resindices, return_counts=True)
-        if not np.all(counts == n_expected):
-            raise ValueError(
-                f"{ff} {lipid}: acyl-chain selection yields "
-                f"{sorted(set(int(c) for c in counts))} carbons per residue, "
-                f"expected {n_expected}. A lipid's two tails "
-                f"are sharing a residue id (GROMACS numbers them identically), so "
-                f"MDAnalysis merges them and SCC can't run.  Renumber md.gro so "
-                f"every tail is its own residue first."
-            )
-        chain = SCC(u, tail_sel=sel)
-        chain.run()
-        scc_samples.append(np.asarray(chain.SCC).ravel())
+    # Order parameter: keep the full per-carbon S_CC for every chain and frame
+    # (the plotting stage averages to a profile).  scc_samples() also guards
+    # against a topology that merges a lipid's two tails (see its docstring).
+    scc_carbons, scc_data = scc_samples(u, ff, lipid)
 
     # MSD needs unwrapped coordinates -- lipyphilic assumes no PBC jumps, and a
     # wrapped trajectory turns every boundary crossing into a ~box-length jump
@@ -155,7 +180,8 @@ def analyse(u, ff, lipid):
         "area_per_lipid": np.asarray(apl.areas).ravel(),
         "memb_thickness": np.asarray(thick.memb_thickness).ravel(),
         "registration": np.asarray(reg.registration).ravel(),
-        "order_parameter": np.concatenate(scc_samples),
+        "scc_carbons": scc_carbons,
+        "scc_data": scc_data,
         "msd_lagtimes": np.asarray(msd.lagtimes),
         "msd_curve": np.nanmean(np.asarray(msd.msd), axis=0),  # mean over lipids
         "D": float(D),
@@ -163,8 +189,9 @@ def analyse(u, ff, lipid):
     }
 
 
-# Properties saved as pooled 1-D sample arrays (histograms downstream).
-SAMPLE_PROPS = ["area_per_lipid", "memb_thickness", "registration", "order_parameter"]
+# Properties saved as pooled 1-D sample arrays (histograms downstream).  Order
+# parameter and lateral diffusion are stored differently (see main()).
+SAMPLE_PROPS = ["area_per_lipid", "memb_thickness", "registration"]
 
 
 def run_one(job):
@@ -224,12 +251,12 @@ def main():
 
     # Regroup by system, keyed by replicate so out-of-order completion is fine.
     results = {p: {} for p in SAMPLE_PROPS}  # prop -> system -> {rep: array}
-    diffusion = {}                           # system -> {rep: result_dict}
+    per_run = {}                             # system -> {rep: result_dict}
     for ff, lipid, rep, res in completed:
         system = f"{ff}_{lipid}"
         for p in SAMPLE_PROPS:
             results[p].setdefault(system, {})[rep] = res[p]
-        diffusion.setdefault(system, {})[rep] = res
+        per_run.setdefault(system, {})[rep] = res
 
     # ---- write sample-based properties: pooled + per-replicate ----
     for p in SAMPLE_PROPS:
@@ -243,9 +270,21 @@ def main():
         np.savez_compressed(path, **out)
         print(f"wrote {path}  ({len(results[p])} systems)")
 
+    # ---- write order parameter: full per-carbon S_CC, one array per replicate --
+    # (per-rep only; together they are the full data, so no pooled duplicate).
+    out = {}
+    for system, by_rep in per_run.items():
+        reps = sorted(by_rep)
+        out[f"{system}_carbons"] = by_rep[reps[0]]["scc_carbons"]
+        for r in reps:
+            out[f"{system}_eq{r}"] = by_rep[r]["scc_data"]  # (n_chain_frames, n_carbons)
+    path = args.out / "lipprops_order_parameter.npz"
+    np.savez_compressed(path, **out)
+    print(f"wrote {path}  ({len(per_run)} systems)")
+
     # ---- write lateral diffusion: MSD curve + fitted D per replicate ----
     out = {}
-    for system, by_rep in diffusion.items():
+    for system, by_rep in per_run.items():
         reps = sorted(by_rep)
         msds = [by_rep[r]["msd_curve"] for r in reps]
         # Replicates share dt but may differ in length; truncate to the common min.
@@ -256,7 +295,7 @@ def main():
         out[f"{system}_Dsem"] = np.asarray([by_rep[r]["Dsem"] for r in reps])
     path = args.out / "lipprops_lateral_diffusion.npz"
     np.savez_compressed(path, **out)
-    print(f"wrote {path}  ({len(diffusion)} systems)")
+    print(f"wrote {path}  ({len(per_run)} systems)")
 
 
 if __name__ == "__main__":

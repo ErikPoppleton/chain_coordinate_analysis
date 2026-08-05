@@ -261,11 +261,75 @@ def plot_order_parameter():
     print(f"wrote {out}")
 
 
+def plot_scd():
+    """S_CD (deuterium) order-parameter profiles from g_lomepro's ``-order`` output.
+
+    Same layout as ``plot_order_parameter`` (S_CC): carbon number down an inverted
+    y-axis (C2/headgroup end at top, tail end at bottom), order parameter on x, the
+    three force fields overlaid per lipid panel.
+
+    Reads ``data/{ff}_{lipid}_*scd_sn*.dat`` -- g_lomepro's ``_AVG_sn{1,2}.dat``
+    output copied per replicate as ``{ff}_{lipid}_{rep}_scd_sn{1,2}.dat``, columns
+    ``carbon_number, mean(-S_CD), sd``.  Every chain file (both tails × all
+    replicates) is treated as one sample profile: the line is the mean over samples
+    and the band their spread.  Pooling the two tails matches the S_CC treatment
+    and is justified here -- for the symmetric lipids in this study the sn-1/sn-2
+    profiles differ by <0.01 (< the standard error)."""
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4.5), sharex=True)
+    any_data = False
+    for ax, lipid in zip(axes, LIPIDS):
+        cmax = 0
+        for ff, label, color in FORCEFIELDS:
+            files = sorted(DATA.glob(f"{ff}_{lipid}_*scd_sn*.dat"))
+            profiles, carbons = [], None
+            for f in files:
+                arr = np.loadtxt(f, comments=("#", "@"))
+                if arr.ndim != 2 or arr.shape[0] == 0:
+                    continue
+                carbons = arr[:, 0].astype(int)
+                profiles.append(arr[:, 1])  # column 1 = mean -S_CD
+            if not profiles:
+                continue
+            any_data = True
+            profiles = np.array(profiles)
+            mean = profiles.mean(axis=0)
+            cmax = max(cmax, int(carbons.max()))
+            ax.plot(mean, carbons, color=color, marker="o", ms=3, lw=1.5, label=label)
+            if len(profiles) > 1:
+                sd = profiles.std(axis=0)
+                ax.fill_betweenx(carbons, mean - sd, mean + sd, color=color,
+                                 alpha=0.2, lw=0)
+        ax.set_title(lipid)
+        ax.set_xlabel(r"$-S_\mathrm{CD}$")
+        if cmax:
+            ax.set_ylim(cmax + 1, 0.5)  # carbon 2 at top, terminal carbon at bottom
+        ax.tick_params(axis="y", right=True)
+    axes[0].set_ylabel("tail carbon number")
+    if not any_data:
+        plt.close(fig)
+        print("skip scd: no data/*_scd_sn*.dat files found")
+        return
+    handles, labels = [], []
+    for ax in axes:
+        h, l = ax.get_legend_handles_labels()
+        if h:
+            handles, labels = h, l
+            break
+    fig.legend(handles, labels, loc="upper right", ncol=len(FORCEFIELDS))
+    fig.suptitle(r"Acyl chain order parameter ($S_\mathrm{CD}$, g_lomepro)")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    out = PLOTS / "lipprop_scd.png"
+    fig.savefig(out, dpi=300)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
 def main():
     PLOTS.mkdir(parents=True, exist_ok=True)
     for stem, title, xlabel, scale in HIST_PROPS:
         plot_histograms(stem, title, xlabel, scale)
     plot_order_parameter()
+    plot_scd()
     plot_lateral_diffusion()
 
 

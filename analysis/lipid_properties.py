@@ -31,6 +31,20 @@ The first three are histogram-ready pooled sample arrays.  order_parameter
 stores the full per-carbon S_CC array per replicate (large -- ~100 MB -- with
 the per-carbon averaging left to the plotting script), and lateral_diffusion
 stores the MSD-vs-lagtime curve and the fitted D per replicate.
+
+S_CD (deuterium) order parameter via g_lomepro
+----------------------------------------------
+By default the script *also* computes the NMR-comparable S_CD order parameter
+with the external g_lomepro binary (a second step, alongside the lipyphilic npz
+analysis above).  For each system it builds the shared index
+``{ff}_{lipid}/lomepro.ndx`` (``make_order_index.generate``) and runs g_lomepro
+``-order`` in every ``eq{rep}/lomepro/``, then copies the resulting per-chain
+profiles into ``data/{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`` for ``plot_scd``.
+
+``--skip-lomepro`` / ``--skip-lipyphilic`` run just one half; the g_lomepro half
+needs only numpy + the binary (not lipyphilic), so on a bare node use::
+
+    python analysis/lipid_properties.py --skip-lipyphilic [--lomepro-bin PATH]
 """
 
 import argparse
@@ -45,13 +59,22 @@ for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXP
     os.environ.setdefault(_v, "1")
 
 import numpy as np
-import MDAnalysis as mda
-from MDAnalysis.transformations import NoJump
-from lipyphilic import AssignLeaflets
-from lipyphilic.analysis.area_per_lipid import AreaPerLipid
-from lipyphilic.analysis.registration import Registration
-from lipyphilic.analysis.memb_thickness import MembThickness
-from lipyphilic.analysis.lateral_diffusion import MSD
+
+# MDAnalysis + lipyphilic are only needed for the default (S_CC / npz) analysis.
+# The --lomepro path just shells out to the g_lomepro binary, so keep these
+# imports optional and error only if the lipyphilic path is actually taken.
+try:
+    import MDAnalysis as mda
+    from MDAnalysis.transformations import NoJump
+    from lipyphilic import AssignLeaflets
+    from lipyphilic.analysis.area_per_lipid import AreaPerLipid
+    from lipyphilic.analysis.registration import Registration
+    from lipyphilic.analysis.memb_thickness import MembThickness
+    from lipyphilic.analysis.lateral_diffusion import MSD
+    _HAVE_LIPYPHILIC = True
+except ImportError as _exc:
+    _HAVE_LIPYPHILIC = False
+    _LIPYPHILIC_ERR = _exc
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -203,21 +226,98 @@ def run_one(job):
     return ff, lipid, rep, analyse(u, ff, lipid)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sims-root", type=Path, default=Path.home() / "Simulations")
-    ap.add_argument("--forcefields", nargs="+", default=FORCEFIELDS)
-    ap.add_argument("--lipids", nargs="+", default=LIPIDS)
-    ap.add_argument("--reps", nargs="+", type=int, default=REPLICATES)
-    ap.add_argument("--traj", default="inbox.xtc",
-                    help="trajectory filename inside each eq dir (default: inbox.xtc)")
-    ap.add_argument("--nprocs", type=int, default=1,
-                    help="analyse this many trajectories in parallel, one core "
-                         "each (the analyses themselves are serial-only). "
-                         "Capped at the number of trajectories found.")
-    ap.add_argument("--out", type=Path, default=DATA)
-    args = ap.parse_args()
+def run_lomepro(args):
+    """Run g_lomepro's ``-order`` (S_CD deuterium order parameter) analysis in
+    every ``eq{rep}/lomepro/`` directory.
+
+    For each ``{ff}_{lipid}`` system this (re)generates the shared order index
+    ``{ff}_{lipid}/lomepro.ndx`` from a replicate's ``md.gro`` (via
+    ``make_order_index.generate``), then per replicate creates a fresh
+    ``eq{rep}/lomepro/`` (overwriting any previous one) and runs, from the
+    ``eq{rep}`` directory::
+
+        echo "<groups>" | g_lomepro_static -f inbox.xtc -n ../lomepro.ndx \\
+            -s md.gro -lip_num <N> [-unsat 2] -order lomepro/scd.out
+
+    The ``sn{1,2}_double_bond`` groups and ``-unsat 2`` are DOPC-specific; the
+    myristoyl lipids (DMPC/DMPG) are saturated, so they select only
+    ``Membrane sn1 sn2`` and omit ``-unsat``.  g_lomepro writes
+    ``lomepro/scd.out_AVG_sn{1,2}.dat`` (columns: carbon, mean -S_CD, sd)."""
+    import shutil
+    import subprocess
+    from make_order_index import generate
+
+    binary = Path(args.lomepro_bin)
+    if not binary.exists():
+        sys.exit(f"g_lomepro binary not found: {binary} (set --lomepro-bin)")
+    DATA.mkdir(parents=True, exist_ok=True)  # destination for the copied S_CD data
+
+    ran = 0
+    for ff in args.forcefields:
+        for lipid in args.lipids:
+            system_dir = args.sims_root / f"{ff}_{lipid}"
+            if not system_dir.is_dir():
+                print(f"skip {ff}_{lipid}: {system_dir} not found")
+                continue
+            # The index is shared across replicates (identical atom order), so
+            # build it once from the first replicate that has an md.gro.
+            gro = next((system_dir / f"eq{r}" / "md.gro" for r in args.reps
+                        if (system_dir / f"eq{r}" / "md.gro").exists()), None)
+            if gro is None:
+                print(f"skip {ff}_{lipid}: no eq*/md.gro to build the index from")
+                continue
+            ndx = system_dir / "lomepro.ndx"
+            info = generate(str(gro), out=str(ndx), ff=ff, lipid=lipid)
+            groups = "Membrane sn1 sn2"
+            if info["unsat"]:
+                groups += " sn1_double_bond sn2_double_bond"
+            print(f"{ff}_{lipid}: wrote {ndx.name} "
+                  f"({info['nlip']} lipids, -unsat {info['unsat']})")
+
+            for rep in args.reps:
+                run_dir = system_dir / f"eq{rep}"
+                traj, gro_r = run_dir / args.traj, run_dir / "md.gro"
+                if not run_dir.is_dir():
+                    continue
+                if not (traj.exists() and gro_r.exists()):
+                    print(f"  skip eq{rep}: {args.traj} or md.gro missing")
+                    continue
+                lome = run_dir / "lomepro"
+                if lome.exists():
+                    shutil.rmtree(lome)          # overwrite a previous run
+                lome.mkdir()
+                cmd = [str(binary), "-f", args.traj, "-n", "../lomepro.ndx",
+                       "-s", "md.gro", "-lip_num", str(info["nlip"]),
+                       "-order", "lomepro/scd.out"]
+                if info["unsat"]:
+                    cmd += ["-unsat", str(info["unsat"])]
+                print(f"  eq{rep}: running g_lomepro ...", flush=True)
+                proc = subprocess.run(cmd, input=groups + "\n", text=True,
+                                      cwd=str(run_dir), capture_output=True)
+                if proc.returncode != 0:
+                    print(f"  eq{rep}: FAILED (rc={proc.returncode}); last output:")
+                    tail = (proc.stderr or proc.stdout).strip().splitlines()[-15:]
+                    print("    " + "\n    ".join(tail))
+                else:
+                    ran += 1
+                    print(f"  eq{rep}: wrote {lome}/scd.out_AVG_sn*.dat")
+                    # Copy the per-chain S_CD profiles into data/ for plot_scd(),
+                    # keyed by replicate so each run is kept (plot_scd globs all
+                    # {ff}_{lipid}_*scd_sn*.dat and treats each as one sample).
+                    for sn in ("sn1", "sn2"):
+                        src = lome / f"scd.out_AVG_{sn}.dat"
+                        dst = DATA / f"{ff}_{lipid}_{rep}_scd_{sn}.dat"
+                        if src.exists():
+                            shutil.copyfile(src, dst)
+                            print(f"         copied -> {dst}")
+                        else:
+                            print(f"         WARNING: {src.name} not produced")
+    print(f"g_lomepro finished: {ran} replicate(s) run")
+
+
+def run_lipyphilic(args):
+    """Compute the lipyphilic S_CC/APL/thickness/registration/diffusion properties
+    for every trajectory and write the ``lipprops_*.npz`` files."""
     args.out.mkdir(parents=True, exist_ok=True)
 
     # Build the (existence-checked) list of independent trajectory jobs.
@@ -296,6 +396,42 @@ def main():
     path = args.out / "lipprops_lateral_diffusion.npz"
     np.savez_compressed(path, **out)
     print(f"wrote {path}  ({len(per_run)} systems)")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--sims-root", type=Path, default=Path.home() / "Simulations")
+    ap.add_argument("--forcefields", nargs="+", default=FORCEFIELDS)
+    ap.add_argument("--lipids", nargs="+", default=LIPIDS)
+    ap.add_argument("--reps", nargs="+", type=int, default=REPLICATES)
+    ap.add_argument("--traj", default="inbox.xtc",
+                    help="trajectory filename inside each eq dir (default: inbox.xtc)")
+    ap.add_argument("--nprocs", type=int, default=1,
+                    help="analyse this many trajectories in parallel, one core "
+                         "each (the analyses themselves are serial-only). "
+                         "Capped at the number of trajectories found.")
+    ap.add_argument("--out", type=Path, default=DATA)
+    # By default both analyses run (the whole pipeline is cheap to re-run); use
+    # the skip flags to do just one -- e.g. --skip-lipyphilic to run g_lomepro on
+    # a node without the lipid64 conda env.
+    ap.add_argument("--skip-lipyphilic", action="store_true",
+                    help="skip the lipyphilic S_CC/APL/thickness/registration/"
+                         "diffusion analysis (the lipprops_*.npz files)")
+    ap.add_argument("--skip-lomepro", action="store_true",
+                    help="skip the g_lomepro S_CD analysis")
+    ap.add_argument("--lomepro-bin",
+                    default=str(Path.home() / "software" / "g_lomepro" / "g_lomepro_static"),
+                    help="path to the g_lomepro static binary")
+    args = ap.parse_args()
+
+    if not args.skip_lipyphilic:
+        if not _HAVE_LIPYPHILIC:
+            sys.exit(f"MDAnalysis/lipyphilic unavailable ({_LIPYPHILIC_ERR}); "
+                     "install them (e.g. the lipid64 env) or pass --skip-lipyphilic.")
+        run_lipyphilic(args)
+    if not args.skip_lomepro:
+        run_lomepro(args)
 
 
 if __name__ == "__main__":

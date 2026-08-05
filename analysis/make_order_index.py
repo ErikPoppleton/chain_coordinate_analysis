@@ -226,6 +226,49 @@ def write_group(fh, name, serials):
     fh.write("\n")
 
 
+def generate(structure, out=None, ff=None, lipid=None):
+    """Build the g_lomepro order-parameter index for ``structure``, write it to
+    ``out`` (default ``order_{ff}_{lipid}.ndx``), and return a dict describing it:
+    ``ff``, ``lipid``, ``nlip`` (lipid count = g_lomepro's ``-lip_num``), ``unsat``
+    (0 or 2, g_lomepro's ``-unsat``), ``per_chain`` (atoms per sn-1/sn-2 chain),
+    ``tail_nc`` and ``out``.  ``ff``/``lipid`` override autodetection.
+
+    Importable so the pipeline (``lipid_properties.py --lomepro``) can produce the
+    shared ``lomepro.ndx`` for a system without shelling out."""
+    atoms = read_gro(structure)
+    scheme, det_lipid = detect(atoms)
+    lipid = lipid or det_lipid
+    if ff:
+        scheme = "amber" if ff == "amber" else "single"
+    ff_label = ff or ("amber" if scheme == "amber" else "charmm/slipids")
+
+    residues = split_residues(atoms)
+    builder = build_amber if scheme == "amber" else build_single
+    nlip, sn1, sn2, db1, db2, membrane = builder(residues, lipid)
+    if nlip == 0:
+        sys.exit(f"no {lipid} lipids found in {structure}")
+
+    # Every lipid must contribute the same chain length (g_lomepro divides
+    # norder/lipid_num and assumes uniform blocks).
+    per1, per2 = len(sn1) // nlip, len(sn2) // nlip
+    if per1 * nlip != len(sn1) or per2 * nlip != len(sn2):
+        sys.exit("chains are not uniform across lipids -- broken/incomplete "
+                 "residues in the structure?")
+
+    out = Path(out) if out else Path(f"order_{ff_label.replace('/', '_')}_{lipid}.ndx")
+    unsat = 2 if lipid in DOUBLE_BOND else 0
+    with open(out, "w") as fh:
+        write_group(fh, "Membrane", membrane)
+        write_group(fh, "Phosphates", phosphates(atoms))
+        write_group(fh, "sn1", sn1)
+        write_group(fh, "sn2", sn2)
+        if unsat:
+            write_group(fh, "sn1_double_bond", db1)
+            write_group(fh, "sn2_double_bond", db2)
+    return {"ff": ff_label, "lipid": lipid, "nlip": nlip, "unsat": unsat,
+            "per_chain": (per1, per2), "tail_nc": TAIL_NC[lipid], "out": out}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -238,46 +281,17 @@ def main():
                     help="override lipid detection")
     args = ap.parse_args()
 
-    atoms = read_gro(args.structure)
-    scheme, lipid = detect(atoms)
-    if args.lipid:
-        lipid = args.lipid
-    if args.ff:
-        scheme = "amber" if args.ff == "amber" else "single"
-    ff = args.ff or ("amber" if scheme == "amber" else "charmm/slipids")
-
-    residues = split_residues(atoms)
-    builder = build_amber if scheme == "amber" else build_single
-    nlip, sn1, sn2, db1, db2, membrane = builder(residues, lipid)
-    if nlip == 0:
-        sys.exit(f"no {lipid} lipids found in {args.structure}")
-
-    # Every lipid must contribute the same chain length (g_lomepro divides
-    # norder/lipid_num and assumes uniform blocks).
-    per1, per2 = len(sn1) // nlip, len(sn2) // nlip
-    if per1 * nlip != len(sn1) or per2 * nlip != len(sn2):
-        sys.exit("chains are not uniform across lipids -- broken/incomplete "
-                 "residues in the structure?")
-
-    out = Path(args.out) if args.out else Path(f"order_{ff.replace('/', '_')}_{lipid}.ndx")
-    unsat = 2 if lipid in DOUBLE_BOND else 0
-    with open(out, "w") as fh:
-        write_group(fh, "Membrane", membrane)
-        write_group(fh, "Phosphates", phosphates(atoms))
-        write_group(fh, "sn1", sn1)
-        write_group(fh, "sn2", sn2)
-        if unsat:
-            write_group(fh, "sn1_double_bond", db1)
-            write_group(fh, "sn2_double_bond", db2)
-
-    print(f"wrote {out}")
-    print(f"  force field : {ff}")
-    print(f"  lipid       : {lipid}  ({nlip} lipids)")
+    info = generate(args.structure, out=args.out, ff=args.ff, lipid=args.lipid)
+    per1, per2 = info["per_chain"]
+    nc = info["tail_nc"]
+    print(f"wrote {info['out']}")
+    print(f"  force field : {info['ff']}")
+    print(f"  lipid       : {info['lipid']}  ({info['nlip']} lipids)")
     print(f"  chain atoms : sn1={per1}, sn2={per2} per lipid "
-          f"(carbonyl + C2..C{TAIL_NC[lipid]}) -> S_CD for C2..C{TAIL_NC[lipid] - 1}")
-    print(f"  g_lomepro   : run with  -unsat {unsat}")
+          f"(carbonyl + C2..C{nc}) -> S_CD for C2..C{nc - 1}")
+    print(f"  g_lomepro   : run with  -unsat {info['unsat']}")
     order = ["Membrane (lipid group)", "sn1", "sn2"]
-    if unsat:
+    if info["unsat"]:
         order += ["sn1_double_bond", "sn2_double_bond"]
     print("  group order g_lomepro will prompt for (order-parameter part):")
     print("    " + " -> ".join(order))

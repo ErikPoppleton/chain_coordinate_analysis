@@ -15,6 +15,7 @@ the shared colour scheme from ``palette.py``.
 Requires only numpy + matplotlib; run it anywhere (paths derive from __file__).
 """
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -28,12 +29,14 @@ PLOTS = ROOT / "plots"
 
 LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
-# (npz stem, figure title, x-axis label, sample scale factor).  The scale
-# rescales samples for display (e.g. diffusion coefficients ~1e-7 cm^2/s).
+# (npz stem, figure title, axis label, scale, per_lipid).  The scale rescales
+# samples for display.  per_lipid marks a per-lipid property (area): its npz
+# arrays are 2-D (n_frames, n_lipids), so the trajectory plot shows a per-frame
+# mean +/- SD over lipids; the whole-membrane properties are one value per frame.
 HIST_PROPS = [
-    ("area_per_lipid", "Area per lipid", r"APL ($\mathrm{\AA}^2$)", 1.0),
-    ("memb_thickness", "Membrane thickness", r"thickness ($\mathrm{\AA}$)", 1.0),
-    ("registration", "Interleaflet registration", "registration coefficient", 1.0),
+    ("area_per_lipid", "Area per lipid", r"APL ($\mathrm{\AA}^2$)", 1.0, True),
+    ("memb_thickness", "Membrane thickness", r"thickness ($\mathrm{\AA}$)", 1.0, False),
+    ("registration", "Interleaflet registration", "registration coefficient", 1.0, False),
 ]
 
 
@@ -54,7 +57,7 @@ def plot_histograms(stem, title, xlabel, scale):
     any_data = False
     for ax, lipid in zip(axes, LIPIDS):
         # Common bins per panel so the three force fields are comparable.
-        pooled = [data[f"{ff}_{lipid}"] * scale
+        pooled = [np.ravel(data[f"{ff}_{lipid}"]) * scale
                   for ff, _, _ in FORCEFIELDS if f"{ff}_{lipid}" in data.files]
         if pooled:
             allv = np.concatenate(pooled)
@@ -64,10 +67,13 @@ def plot_histograms(stem, title, xlabel, scale):
             if key not in data.files:
                 continue
             any_data = True
-            ax.hist(data[key] * scale, bins=bins, density=True, color=color,
+            vals = np.ravel(data[key]) * scale
+            ax.hist(vals, bins=bins, density=True, color=color,
                     histtype="stepfilled", alpha=0.35, label=label)
-            ax.hist(data[key] * scale, bins=bins, density=True, color=color,
+            ax.hist(vals, bins=bins, density=True, color=color,
                     histtype="step", lw=1.5)
+            # Dashed line at this force field's mean.
+            ax.axvline(np.nanmean(vals), color=color, ls="--", lw=1.3)
         ax.set_title(lipid)
         ax.set_xlabel(xlabel)
         ax.tick_params(axis="y", right=True)
@@ -260,7 +266,7 @@ def plot_order_parameter():
             handles, labels = h, l
             break
     fig.legend(handles, labels, loc="upper right", ncol=len(FORCEFIELDS))
-    fig.suptitle("Acyl chain order parameter")
+    fig.suptitle(r"Acyl chain order parameter $S_\mathrm{CC}$")
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     out = PLOTS / "lipprop_order_parameter.png"
     fig.savefig(out, dpi=300)
@@ -275,30 +281,39 @@ def plot_scd():
     y-axis (C2/headgroup end at top, tail end at bottom), order parameter on x, the
     three force fields overlaid per lipid panel.
 
-    Reads ``data/{ff}_{lipid}_*scd_sn*.dat`` -- g_lomepro's ``_AVG_sn{1,2}.dat``
-    output copied per replicate as ``{ff}_{lipid}_{rep}_scd_sn{1,2}.dat``, columns
-    ``carbon_number, mean(-S_CD), sd``.  Every chain file (both tails × all
-    replicates) is treated as one sample profile: the line is the mean over samples
-    and the band their spread.  Pooling the two tails matches the S_CC treatment
-    and is justified here -- for the symmetric lipids in this study the sn-1/sn-2
-    profiles differ by <0.01 (< the standard error)."""
+    Reads ``data/{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`` -- g_lomepro's
+    ``_AVG_sn{1,2}.dat`` output copied per replicate, columns
+    ``carbon_number, mean(-S_CD), sd``.  To match the per-replicate error scheme
+    used everywhere else (see ``plot_order_parameter``), the two tails are
+    averaged *within* each replicate to give one profile per replicate; the line
+    is the mean over replicates and the band the **SD across replicates**.
+    (Files with no replicate token are treated as a single replicate.)"""
     fig, axes = plt.subplots(1, 3, figsize=(13, 4.5), sharex=True)
     any_data = False
     for ax, lipid in zip(axes, LIPIDS):
         cmax = 0
         for ff, label, color in FORCEFIELDS:
-            files = sorted(DATA.glob(f"{ff}_{lipid}_*scd_sn*.dat"))
-            profiles, carbons = [], None
-            for f in files:
+            # Group chain files by replicate: {rep: {sn: profile}}.  The rep token
+            # is optional so pre-per-rep files (…_scd_sn1.dat) count as one rep.
+            pat = re.compile(rf"^{re.escape(ff)}_{re.escape(lipid)}_"
+                             rf"(?:(\d+)_)?scd_(sn[12])\.dat$")
+            by_rep, carbons = {}, None
+            for f in sorted(DATA.glob(f"{ff}_{lipid}_*scd_sn*.dat")):
+                m = pat.match(f.name)
+                if not m:
+                    continue
                 arr = np.loadtxt(f, comments=("#", "@"))
                 if arr.ndim != 2 or arr.shape[0] == 0:
                     continue
                 carbons = arr[:, 0].astype(int)
-                profiles.append(arr[:, 1])  # column 1 = mean -S_CD
-            if not profiles:
+                rep = int(m.group(1)) if m.group(1) else 0
+                by_rep.setdefault(rep, {})[m.group(2)] = arr[:, 1]  # col 1 = mean -S_CD
+            if not by_rep:
                 continue
             any_data = True
-            profiles = np.array(profiles)
+            # Per-replicate profile = mean over that rep's tails, then aggregate reps.
+            profiles = np.array([np.mean(list(tails.values()), axis=0)
+                                 for _, tails in sorted(by_rep.items())])
             mean = profiles.mean(axis=0)
             cmax = max(cmax, int(carbons.max()))
             ax.plot(mean, carbons, color=color, marker="o", ms=3, lw=1.5, label=label)
@@ -323,7 +338,7 @@ def plot_scd():
             handles, labels = h, l
             break
     fig.legend(handles, labels, loc="upper right", ncol=len(FORCEFIELDS))
-    fig.suptitle(r"Acyl chain order parameter ($S_\mathrm{CD}$, g_lomepro)")
+    fig.suptitle(r"Acyl chain order parameter ($S_\mathrm{CD}$)")
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     out = PLOTS / "lipprop_scd.png"
     fig.savefig(out, dpi=300)
@@ -331,10 +346,65 @@ def plot_scd():
     print(f"wrote {out}")
 
 
+def plot_trajectories(stem, title, ylabel, scale, per_lipid):
+    """Per-frame trajectory of ``stem`` for replicate 1, as a 3x3 grid: lipids
+    across columns (DOPC/DMPC/DMPG), force fields down rows (CHARMM/AMBER/
+    SLipids).  A per-lipid property (area) shows the per-frame mean +/- SD over
+    lipids; a whole-membrane property (thickness, registration) shows its single
+    per-frame value.  All nine panels share the y-axis, so the parameter is
+    directly comparable across force field and lipid."""
+    data = load(stem)
+    if data is None:
+        print(f"skip {stem} trajectory: {DATA / f'lipprops_{stem}.npz'} not found")
+        return
+
+    fig, axes = plt.subplots(len(FORCEFIELDS), len(LIPIDS), figsize=(13, 9),
+                             sharex=True, sharey=True)
+    any_data = False
+    for r, (ff, ff_label, color) in enumerate(FORCEFIELDS):
+        for c, lipid in enumerate(LIPIDS):
+            ax = axes[r][c]
+            if r == 0:
+                ax.set_title(lipid)
+            if c == 0:
+                ax.set_ylabel(ff_label)
+            key = f"{ff}_{lipid}_eq1"
+            if key not in data.files:
+                continue
+            arr = data[key] * scale
+            if per_lipid:
+                if arr.ndim != 2:
+                    continue  # old ravelled data; needs a fresh analysis run
+                m, sd = arr.mean(axis=1), arr.std(axis=1)
+                x = np.arange(arr.shape[0])
+                ax.plot(x, m, color=color, lw=1.0)
+                ax.fill_between(x, m - sd, m + sd, color=color, alpha=0.25, lw=0)
+            else:
+                y = np.ravel(arr)
+                ax.plot(np.arange(y.shape[0]), y, color=color, lw=1.0)
+            any_data = True
+    if not any_data:
+        plt.close(fig)
+        extra = (" (per-lipid arrays must be 2-D -- rerun lipid_properties.py)"
+                 if per_lipid else "")
+        print(f"skip {stem} trajectory: no replicate-1 data{extra}")
+        return
+    for ax in axes[-1]:
+        ax.set_xlabel("frame")
+    fig.supylabel(ylabel)
+    fig.suptitle(f"{title} — per-frame trajectory (replicate 1)")
+    fig.tight_layout(rect=(0.02, 0, 1, 0.97))
+    out = PLOTS / f"lipprop_traj_{stem}.png"
+    fig.savefig(out, dpi=300)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
 def main():
     PLOTS.mkdir(parents=True, exist_ok=True)
-    for stem, title, xlabel, scale in HIST_PROPS:
+    for stem, title, xlabel, scale, per_lipid in HIST_PROPS:
         plot_histograms(stem, title, xlabel, scale)
+        plot_trajectories(stem, title, xlabel, scale, per_lipid)
     plot_order_parameter()
     plot_scd()
     plot_lateral_diffusion()

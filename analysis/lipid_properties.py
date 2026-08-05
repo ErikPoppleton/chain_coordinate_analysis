@@ -21,7 +21,7 @@ both the MDAnalysis universes and g_lomepro's ``-s``, which also sidesteps
 MDAnalysis's inability to read the too-new GROMACS 2026.3 ``md.tpr``.
 
 Properties, one .npz written to ``data/`` per property:
-  * area_per_lipid   -- AreaPerLipid, per-lipid-per-frame samples (A^2)
+  * area_per_lipid   -- AreaPerLipid, (n_frames, n_lipids) per replicate (A^2)
   * memb_thickness   -- MembThickness, per-frame samples (A)
   * registration     -- Registration, per-frame samples (correlation coeff.)
   * order_parameter  -- full per-carbon S_CC for every chain and frame
@@ -31,6 +31,11 @@ The first three are histogram-ready pooled sample arrays.  order_parameter
 stores the full per-carbon S_CC array per replicate (large -- ~100 MB -- with
 the per-carbon averaging left to the plotting script), and lateral_diffusion
 stores the MSD-vs-lagtime curve and the fitted D per replicate.
+
+For replicate 1 it also renders two AreaPerLipid.project_area() heatmaps per
+system directly to ``plots/lipprop_aplproj_{ff}_{lipid}_{avg,final}.png`` (APL
+projected onto the membrane plane: mean over the trajectory, and the final
+frame).
 
 S_CD (deuterium) order parameter via g_lomepro
 ----------------------------------------------
@@ -57,6 +62,9 @@ from pathlib import Path
 # cores.  Override by exporting OMP_NUM_THREADS etc. yourself.
 for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
     os.environ.setdefault(_v, "1")
+# Force a headless matplotlib backend before lipyphilic imports pyplot, so the
+# AreaPerLipid.project_area() figures render in worker processes without a display.
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 import numpy as np
 
@@ -78,6 +86,7 @@ except ImportError as _exc:
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
+PLOTS = ROOT / "plots"
 
 FORCEFIELDS = ["charmm", "amber", "slipids"]
 LIPIDS = ["DOPC", "DMPC", "DMPG"]
@@ -163,14 +172,57 @@ def build_universe(run_dir, traj):
     return mda.Universe(str(run_dir / "memb.gro"), str(traj))
 
 
-def analyse(u, ff, lipid):
+def save_area_projections(apl, u, ff, lipid):
+    """Write AreaPerLipid.project_area() heatmaps for this system to ``plots/``:
+    the whole-trajectory mean and the final frame.  ``plots/lipprop_aplproj_
+    {ff}_{lipid}_{avg,final}.png``.
+
+    Must be called *before* the NoJump transform is added -- project_area reads
+    lipid COMs from the trajectory and wraps them into the unit cell, which only
+    works while coordinates are still in-box.  A failure here is downgraded to a
+    warning so it never costs the (already-computed) numerical results."""
+    import matplotlib.pyplot as plt
+    PLOTS.mkdir(parents=True, exist_ok=True)
+    # project_area() takes each lipid's COM with unwrap=True, which needs bonds;
+    # a .gro topology (memb.gro) has none, so guess them on the lipid atoms first.
+    try:
+        apl.membrane.residues.atoms.guess_bonds()
+    except Exception as exc:
+        print(f"    WARNING: bond guessing failed for {ff}_{lipid}; skipping APL "
+              f"projections: {str(exc)[:80]}", flush=True)
+        return
+    n = u.trajectory.n_frames
+    # (tag, project_area kwargs, title): default kwargs average over all frames;
+    # start=n-1 selects only the last frame.
+    for tag, kw, sub in [("avg", {}, "mean over trajectory"),
+                         ("final", {"start": n - 1}, "final frame")]:
+        try:
+            proj = apl.project_area(cmap="viridis", **kw)
+            proj.ax.set_title(f"{ff} {lipid} — APL, {sub} (rep 1)",
+                              loc="left", weight="bold", fontsize=9)
+            if proj.cbar is not None:
+                proj.cbar.set_label(r"APL ($\mathrm{\AA}^2$)")
+            out = PLOTS / f"lipprop_aplproj_{ff}_{lipid}_{tag}.png"
+            proj.fig.savefig(out, dpi=300, bbox_inches="tight")
+            plt.close(proj.fig)
+            print(f"    wrote {out.name}", flush=True)
+        except Exception as exc:  # visualisation only -- keep the numbers
+            print(f"    WARNING: APL {tag} projection failed for {ff}_{lipid}: "
+                  f"{str(exc)[:80]}", flush=True)
+
+
+def analyse(u, ff, lipid, rep):
     """Run all five lipyphilic analyses on one trajectory; return a dict of
-    plot-ready arrays."""
+    plot-ready arrays.  For replicate 1 it also writes the APL projection maps."""
     leaflets = AssignLeaflets(u, lipid_sel=PHOSPHATE)
     leaflets.run()
 
     apl = AreaPerLipid(u, lipid_sel=PHOSPHATE, leaflets=leaflets.leaflets)
     apl.run()
+
+    # APL projection maps (rep 1 only) -- before NoJump, while coords are in-box.
+    if rep == 1:
+        save_area_projections(apl, u, ff, lipid)
 
     thick = MembThickness(u, lipid_sel=PHOSPHATE, leaflets=leaflets.leaflets)
     thick.run()
@@ -195,7 +247,10 @@ def analyse(u, ff, lipid):
     D, Dsem = msd.diffusion_coefficient()
 
     return {
-        "area_per_lipid": np.asarray(apl.areas).ravel(),
+        # Keep APL 2-D (n_frames, n_lipids) rather than ravelling: the histogram
+        # flattens it anyway, but the per-frame trajectory plot needs the frame
+        # axis to show per-frame mean +/- SD over lipids.
+        "area_per_lipid": np.asarray(apl.areas).T,
         "memb_thickness": np.asarray(thick.memb_thickness).ravel(),
         "registration": np.asarray(reg.registration).ravel(),
         "scc_carbons": scc_carbons,
@@ -218,7 +273,7 @@ def run_one(job):
     ff, lipid, rep, run_dir, traj = job
     print(f"analysing {ff}_{lipid} eq{rep}  ({traj.name})", flush=True)
     u = build_universe(run_dir, traj)
-    return ff, lipid, rep, analyse(u, ff, lipid)
+    return ff, lipid, rep, analyse(u, ff, lipid, rep)
 
 
 def run_lomepro(args):

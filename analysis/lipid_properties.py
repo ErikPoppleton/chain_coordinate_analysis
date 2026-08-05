@@ -237,7 +237,11 @@ def run_lomepro(args):
     The ``sn{1,2}_double_bond`` groups and ``-unsat 2`` are DOPC-specific; the
     myristoyl lipids (DMPC/DMPG) are saturated, so they select only
     ``Membrane sn1 sn2`` and omit ``-unsat``.  g_lomepro writes
-    ``lomepro/scd.out_AVG_sn{1,2}.dat`` (columns: carbon, mean -S_CD, sd)."""
+    ``lomepro/scd.out_AVG_sn{1,2}.dat`` (columns: carbon, mean -S_CD, sd).
+
+    g_lomepro needs ``GMXLIB`` set to GROMACS's data directory; if it is unset,
+    it is derived from ``gmx`` on ``PATH`` (``<prefix>/bin/gmx`` ->
+    ``<prefix>/share/gromacs/top``)."""
     import shutil
     import subprocess
     from make_order_index import generate
@@ -246,6 +250,21 @@ def run_lomepro(args):
     if not binary.exists():
         sys.exit(f"g_lomepro binary not found: {binary} (set --lomepro-bin)")
     DATA.mkdir(parents=True, exist_ok=True)  # destination for the copied S_CD data
+
+    # g_lomepro (a GROMACS tool) needs GMXLIB pointing at GROMACS's data dir.
+    # Respect an existing GMXLIB; otherwise derive it from `gmx` on PATH, whose
+    # bin/ sits a fixed two levels above share/gromacs/top
+    # (<prefix>/bin/gmx -> <prefix>/share/gromacs/top).
+    env = dict(os.environ)
+    if "GMXLIB" not in env:
+        gmx = shutil.which("gmx")
+        if gmx:
+            gmxlib = Path(gmx).parent.parent / "share" / "gromacs" / "top"
+            env["GMXLIB"] = str(gmxlib)
+            print(f"GMXLIB={gmxlib}"
+                  + ("" if gmxlib.is_dir() else "  (WARNING: does not exist)"))
+        else:
+            print("WARNING: GMXLIB unset and `gmx` not on PATH; g_lomepro may fail")
 
     ran = 0
     for ff in args.forcefields:
@@ -290,7 +309,7 @@ def run_lomepro(args):
                     cmd += ["-unsat", str(info["unsat"])]
                 print(f"  eq{rep}: running g_lomepro ...", flush=True)
                 proc = subprocess.run(cmd, input=groups + "\n", text=True,
-                                      cwd=str(run_dir), capture_output=True)
+                                      cwd=str(run_dir), capture_output=True, env=env)
                 if proc.returncode != 0:
                     print(f"  eq{rep}: FAILED (rc={proc.returncode}); last output:")
                     tail = (proc.stderr or proc.stdout).strip().splitlines()[-15:]

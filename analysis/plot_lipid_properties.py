@@ -93,8 +93,11 @@ def plot_histograms(stem, title, xlabel, scale):
     print(f"wrote {out}")
 
 
-# Candidate inset corners as [x0, y0, w, h] in axes fractions.
-_INSET_TL = [0.09, 0.57, 0.40, 0.38]  # top-left
+# Candidate inset corners as [x0, y0, w, h] in axes fractions.  The top-left box
+# keeps its bottom at 0.57 (so its overlap with the curves -- hence the chosen
+# corner -- is unchanged) but stops at 0.86 rather than ~0.95, leaving a fixed
+# gap for its title below the panel's top spine, decoupled from subplots_adjust.
+_INSET_TL = [0.09, 0.57, 0.40, 0.29]  # top-left  (top at 0.86)
 _INSET_BR = [0.57, 0.10, 0.40, 0.38]  # bottom-right
 
 
@@ -192,6 +195,10 @@ def plot_lateral_diffusion():
     fig.legend(handles, labels, loc="upper right", ncol=len(FORCEFIELDS))
     fig.suptitle("Lateral diffusion")
     fig.tight_layout(rect=(0, 0, 1, 0.94))
+    # Grow the panels upward into the empty band below the suptitle: the inset's
+    # title clears the top spine by a margin that scales with the panel height, so
+    # taller panels tuck it under the spine instead of overlapping it.
+    fig.subplots_adjust(top=0.86)
     out = PLOTS / "lipprop_lateral_diffusion.png"
     fig.savefig(out, dpi=300)
     plt.close(fig)

@@ -173,31 +173,47 @@ def build_universe(run_dir, traj):
 
 
 def save_area_projections(apl, u, ff, lipid):
-    """Write AreaPerLipid.project_area() heatmaps for this system to ``plots/``:
-    the whole-trajectory mean and the final frame.  ``plots/lipprop_aplproj_
-    {ff}_{lipid}_{avg,final}.png``.
+    """Write APL-projected-onto-the-membrane heatmaps for this system to
+    ``plots/lipprop_aplproj_{ff}_{lipid}_{avg,final}.png``:
 
-    Must be called *before* the NoJump transform is added -- project_area reads
-    lipid COMs from the trajectory and wraps them into the unit cell, which only
-    works while coordinates are still in-box.  A failure here is downgraded to a
-    warning so it never costs the (already-computed) numerical results."""
+      * ``avg``   -- mean APL over the trajectory, **linearly** interpolated
+                     between lipids: a smooth local-APL field.
+      * ``final`` -- APL in the final frame, **nearest-neighbour** interpolated
+                     so each grid cell takes its closest lipid's area == the
+                     Voronoi tessellation lipyphilic uses to compute APL.
+
+    lipyphilic's ``AreaPerLipid.project_area()`` hard-wires linear interpolation
+    (so a single frame comes out smoothly blended, not tessellated); we drive
+    ``lipyphilic.plotting.ProjectionPlot`` directly to choose the method.  Lipid
+    positions are the phosphate xy (one per lipid, the same selection APL's
+    Voronoi is built from), so no COM unwrap / bond guessing is needed.
+
+    Must be called before the NoJump transform is added (coords still in-box).
+    A failure is downgraded to a warning so it never costs the numerical
+    results."""
     import matplotlib.pyplot as plt
+    from lipyphilic.plotting import ProjectionPlot
     PLOTS.mkdir(parents=True, exist_ok=True)
-    # project_area() takes each lipid's COM with unwrap=True, which needs bonds;
-    # a .gro topology (memb.gro) has none, so guess them on the lipid atoms first.
-    try:
-        apl.membrane.residues.atoms.guess_bonds()
-    except Exception as exc:
-        print(f"    WARNING: bond guessing failed for {ff}_{lipid}; skipping APL "
-              f"projections: {str(exc)[:80]}", flush=True)
-        return
+    areas = np.asarray(apl.areas)  # (n_lipids, n_frames), rows aligned with apl.membrane
     n = u.trajectory.n_frames
-    # (tag, project_area kwargs, title): default kwargs average over all frames;
-    # start=n-1 selects only the last frame.
-    for tag, kw, sub in [("avg", {}, "mean over trajectory"),
-                         ("final", {"start": n - 1}, "final frame")]:
+    # (tag, per-lipid values, frame to read positions from, interp method, subtitle)
+    specs = [("avg", np.nanmean(areas, axis=1), n // 2, "linear", "mean over trajectory"),
+             ("final", areas[:, -1], n - 1, "nearest", "final frame")]
+    for tag, values, frame, method, sub in specs:
         try:
-            proj = apl.project_area(cmap="viridis", **kw)
+            u.trajectory[frame]
+            box = u.dimensions
+            xy = apl.membrane.positions[:, :2].copy()
+            xy[:, 0] %= box[0]  # wrap into the unit cell so every lipid lands on the grid
+            xy[:, 1] %= box[1]
+            x_bins = np.linspace(0.0, np.ceil(box[0]), int(np.ceil(box[0])) + 1)
+            y_bins = np.linspace(0.0, np.ceil(box[1]), int(np.ceil(box[1])) + 1)
+            proj = ProjectionPlot(xy[:, 0], xy[:, 1], values)
+            proj.project_values(bins=(x_bins, y_bins))
+            proj.interpolate(method=method)  # 'nearest' -> Voronoi tiles; 'linear' -> smooth
+            # Own (wider) axes so the title clears ProjectionPlot's default 3x3" + cbar.
+            _fig, _ax = plt.subplots(figsize=(4.6, 3.4))
+            proj.plot_projection(ax=_ax, cmap="viridis")
             proj.ax.set_title(f"{ff} {lipid} — APL, {sub} (rep 1)",
                               loc="left", weight="bold", fontsize=9)
             if proj.cbar is not None:

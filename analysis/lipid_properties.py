@@ -12,13 +12,13 @@ MDAnalysis installed::
 
 Input layout (identical on the local box and the cluster)::
 
-    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/md.tpr        topology
-    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/inbox.xtc     trajectory (--traj to override)
-    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/md.gro        last-frame topology fallback
+    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/memb.gro      topology (waters-stripped)
+    ~/Simulations/{ff}_{lipid}/eq{1,2,3}/inbox.xtc     trajectory (waters-stripped; --traj to override)
 
-The GROMACS 2026.3 ``.tpr`` files are too new for MDAnalysis's TPR parser, so
-if MDAnalysis can't read ``md.tpr`` directly the script falls back to the
-last-configuration ``md.gro`` that every run directory contains.
+Both ``memb.gro`` and ``inbox.xtc`` have waters stripped (to speed up universe
+setup); their atom sets must match.  ``memb.gro`` is used as the topology for
+both the MDAnalysis universes and g_lomepro's ``-s``, which also sidesteps
+MDAnalysis's inability to read the too-new GROMACS 2026.3 ``md.tpr``.
 
 Properties, one .npz written to ``data/`` per property:
   * area_per_lipid   -- AreaPerLipid, per-lipid-per-frame samples (A^2)
@@ -136,7 +136,7 @@ def scc_samples(u, ff, lipid):
                 f"{sorted(set(int(c) for c in counts))} carbons per residue, "
                 f"expected {n_carbons}. A lipid's two tails are sharing a residue "
                 f"id (GROMACS numbers them identically), so MDAnalysis merges "
-                f"them.  Renumber md.gro so every tail is its own residue first."
+                f"them.  Renumber memb.gro so every tail is its own residue first."
             )
         m = tail.n_residues
         # Order carbons within each residue by acyl number so CHARMM (ascending in
@@ -154,18 +154,13 @@ def scc_samples(u, ff, lipid):
 
 
 def build_universe(run_dir, traj):
-    """Universe for ``run_dir``, coping with too-new .tpr files.
+    """Universe for ``run_dir`` from ``memb.gro`` + the trajectory.
 
-    Tries ``md.tpr`` directly; on failure falls back to the last-configuration
-    ``md.gro``, which every run directory always contains and which MDAnalysis
-    can read regardless of GROMACS version."""
-    tpr = run_dir / "md.tpr"
-    if tpr.exists():
-        try:
-            return mda.Universe(str(tpr), str(traj))
-        except Exception as exc:  # tpx version too new for MDAnalysis, etc.
-            print(f"    tpr unreadable by MDAnalysis ({str(exc)[:50]}...); using md.gro")
-    return mda.Universe(str(run_dir / "md.gro"), str(traj))
+    ``memb.gro`` is the waters-stripped membrane structure whose atom set matches
+    the (also waters-stripped) ``inbox.xtc``.  Using it both keeps the topology
+    consistent with the trajectory and sidesteps MDAnalysis's inability to read
+    the too-new GROMACS 2026.3 ``md.tpr``."""
+    return mda.Universe(str(run_dir / "memb.gro"), str(traj))
 
 
 def analyse(u, ff, lipid):
@@ -231,13 +226,13 @@ def run_lomepro(args):
     every ``eq{rep}/lomepro/`` directory.
 
     For each ``{ff}_{lipid}`` system this (re)generates the shared order index
-    ``{ff}_{lipid}/lomepro.ndx`` from a replicate's ``md.gro`` (via
+    ``{ff}_{lipid}/lomepro.ndx`` from a replicate's ``memb.gro`` (via
     ``make_order_index.generate``), then per replicate creates a fresh
     ``eq{rep}/lomepro/`` (overwriting any previous one) and runs, from the
     ``eq{rep}`` directory::
 
         echo "<groups>" | g_lomepro_static -f inbox.xtc -n ../lomepro.ndx \\
-            -s md.gro -lip_num <N> [-unsat 2] -order lomepro/scd.out
+            -s memb.gro -lip_num <N> [-unsat 2] -order lomepro/scd.out
 
     The ``sn{1,2}_double_bond`` groups and ``-unsat 2`` are DOPC-specific; the
     myristoyl lipids (DMPC/DMPG) are saturated, so they select only
@@ -260,11 +255,13 @@ def run_lomepro(args):
                 print(f"skip {ff}_{lipid}: {system_dir} not found")
                 continue
             # The index is shared across replicates (identical atom order), so
-            # build it once from the first replicate that has an md.gro.
-            gro = next((system_dir / f"eq{r}" / "md.gro" for r in args.reps
-                        if (system_dir / f"eq{r}" / "md.gro").exists()), None)
+            # build it once from the first replicate that has a memb.gro.  It must
+            # come from memb.gro (not md.gro) so the serials match the
+            # waters-stripped inbox.xtc that g_lomepro reads.
+            gro = next((system_dir / f"eq{r}" / "memb.gro" for r in args.reps
+                        if (system_dir / f"eq{r}" / "memb.gro").exists()), None)
             if gro is None:
-                print(f"skip {ff}_{lipid}: no eq*/md.gro to build the index from")
+                print(f"skip {ff}_{lipid}: no eq*/memb.gro to build the index from")
                 continue
             ndx = system_dir / "lomepro.ndx"
             info = generate(str(gro), out=str(ndx), ff=ff, lipid=lipid)
@@ -276,18 +273,18 @@ def run_lomepro(args):
 
             for rep in args.reps:
                 run_dir = system_dir / f"eq{rep}"
-                traj, gro_r = run_dir / args.traj, run_dir / "md.gro"
+                traj, gro_r = run_dir / args.traj, run_dir / "memb.gro"
                 if not run_dir.is_dir():
                     continue
                 if not (traj.exists() and gro_r.exists()):
-                    print(f"  skip eq{rep}: {args.traj} or md.gro missing")
+                    print(f"  skip eq{rep}: {args.traj} or memb.gro missing")
                     continue
                 lome = run_dir / "lomepro"
                 if lome.exists():
                     shutil.rmtree(lome)          # overwrite a previous run
                 lome.mkdir()
                 cmd = [str(binary), "-f", args.traj, "-n", "../lomepro.ndx",
-                       "-s", "md.gro", "-lip_num", str(info["nlip"]),
+                       "-s", "memb.gro", "-lip_num", str(info["nlip"]),
                        "-order", "lomepro/scd.out"]
                 if info["unsat"]:
                     cmd += ["-unsat", str(info["unsat"])]

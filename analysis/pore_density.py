@@ -26,14 +26,21 @@ Writes one ``data/poredens_{ff}_{lipid}.npz`` per run (fixed bin edges, so every
 map is directly comparable):
   ``r_edges``, ``z_edges`` (nm) and one 2-D array per selection name.
 
-Run in the MDAnalysis env, e.g.::
+Run in the MDAnalysis env.  With no arguments it discovers all nine systems the
+same way ``lipid_properties.py`` does -- iterating force field x lipid under
+``--sims-root`` (default ``~/Simulations``), looking in
+``{ff}_{lipid}/{--run-subdir}/`` (default ``umbrella23``) for the ``md.{xtc,gro}``
++ ``rerunerr.log`` triple.  Positional run directories override discovery (each
+must hold that triple), e.g. for a local test against ``tmp/``::
 
-    conda run -n lipid64 python analysis/pore_density.py                 # tmp/
-    conda run -n lipid64 python analysis/pore_density.py run1/ run2/ ...
+    conda run -n lipid64 python analysis/pore_density.py                 # all 9
+    conda run -n lipid64 python analysis/pore_density.py --lipids DMPC    # subset
+    conda run -n lipid64 python analysis/pore_density.py tmp/             # one dir
 
 then plot with ``plot_pore_density.py``.
 """
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -44,8 +51,10 @@ import MDAnalysis as mda
 import make_density_index as mdi
 
 ROOT = Path(__file__).resolve().parent.parent
-TMP = ROOT / "tmp"
 DATA = ROOT / "data"
+
+FORCEFIELDS = ["charmm", "amber", "slipids"]
+LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 # Selections to map (subset of make_density_index's groups).
 SELECTIONS = ["water", "phosphorus", "glycerol_C2", "midpoint_C"]
@@ -133,8 +142,24 @@ def process(run_dir, out_dir):
 
 
 def main():
-    args = sys.argv[1:]
-    runs = [Path(a) for a in args] if args else [TMP]
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("runs", nargs="*", type=Path,
+                    help="explicit pore run directories (each with md.xtc/md.gro/"
+                         "rerunerr.log); overrides discovery when given")
+    ap.add_argument("--sims-root", type=Path, default=Path.home() / "Simulations")
+    ap.add_argument("--forcefields", nargs="+", default=FORCEFIELDS)
+    ap.add_argument("--lipids", nargs="+", default=LIPIDS)
+    ap.add_argument("--run-subdir", default="umbrella23",
+                    help="pore run subdir inside each {ff}_{lipid} (default: umbrella23)")
+    args = ap.parse_args()
+
+    if args.runs:
+        runs = args.runs
+    else:
+        runs = [args.sims_root / f"{ff}_{lipid}" / args.run_subdir
+                for ff in args.forcefields for lipid in args.lipids]
+
     DATA.mkdir(parents=True, exist_ok=True)
     for run in runs:
         process(run, DATA)

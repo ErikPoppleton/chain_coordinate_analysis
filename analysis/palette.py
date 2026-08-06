@@ -19,7 +19,9 @@ The gold ramp's light end is kept a solid gold rather than near-white, so the
 lightest replicates don't wash out.
 """
 
-from matplotlib.colors import LinearSegmentedColormap
+import colorsys
+
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
 
 # (key as it appears in the filename prefix, display label, solid colour).
 # One shared order used by every plot.
@@ -41,3 +43,22 @@ _RAMPS = {
 # Matplotlib colormap per force field, built from the ramps above.
 CMAPS = {key: LinearSegmentedColormap.from_list(key, stops)
          for key, stops in _RAMPS.items()}
+
+
+def evenly_spaced_colors(n, lightness=0.5, saturation=0.6):
+    """`n` RGB colours with hues evenly spaced around the wheel at *constant*
+    HLS lightness and saturation.
+
+    Intended for distinguishing many traces of the same class (e.g. the 64
+    upper-leaflet lipid trajectories) where matplotlib's 10-colour default runs
+    out and a light->dark sequential ramp would wrongly imply an ordering.  The
+    fixed lightness keeps every colour equally prominent; only the hue changes.
+    """
+    return [colorsys.hls_to_rgb(i / n, lightness, saturation) for i in range(n)]
+
+
+def evenly_spaced_cmap(n, lightness=0.5, saturation=0.6, name="iso"):
+    """A ListedColormap of ``n`` evenly hue-spaced, constant-lightness colours
+    (see :func:`evenly_spaced_colors`)."""
+    return ListedColormap(evenly_spaced_colors(n, lightness, saturation),
+                          name=f"{name}{n}")

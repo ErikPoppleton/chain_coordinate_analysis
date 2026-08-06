@@ -182,6 +182,13 @@ def save_area_projections(apl, u, ff, lipid):
                      so each grid cell takes its closest lipid's area == the
                      Voronoi tessellation lipyphilic uses to compute APL.
 
+    Only the **upper leaflet** is shown.  APL is defined by a *per-leaflet*
+    Voronoi tessellation, so mixing both leaflets' phosphates into one projection
+    gives cells that are not the APL Voronoi cells (a lipid's tile can be clipped
+    by an opposite-leaflet phosphate that happens to sit nearby in xy) --
+    rasterised cell area then correlates with APL at only ~0.2 vs ~0.98 for a
+    single leaflet.  Restricting to one leaflet keeps tile area == APL.
+
     lipyphilic's ``AreaPerLipid.project_area()`` hard-wires linear interpolation
     (so a single frame comes out smoothly blended, not tessellated); we drive
     ``lipyphilic.plotting.ProjectionPlot`` directly to choose the method.  Lipid
@@ -194,27 +201,29 @@ def save_area_projections(apl, u, ff, lipid):
     import matplotlib.pyplot as plt
     from lipyphilic.plotting import ProjectionPlot
     PLOTS.mkdir(parents=True, exist_ok=True)
-    areas = np.asarray(apl.areas)  # (n_lipids, n_frames), rows aligned with apl.membrane
+    areas = np.asarray(apl.areas)          # (n_lipids, n_frames), rows aligned with apl.membrane
+    leaflets = np.asarray(apl.leaflets)    # (n_lipids, n_frames) or (n_lipids,); 1 == upper
     n = u.trajectory.n_frames
-    # (tag, per-lipid values, frame to read positions from, interp method, subtitle)
+    # (tag, per-lipid values, frame to read positions/leaflet from, interp method, subtitle)
     specs = [("avg", np.nanmean(areas, axis=1), n // 2, "linear", "mean over trajectory"),
              ("final", areas[:, -1], n - 1, "nearest", "final frame")]
     for tag, values, frame, method, sub in specs:
         try:
             u.trajectory[frame]
             box = u.dimensions
-            xy = apl.membrane.positions[:, :2].copy()
+            upper = (leaflets[:, frame] if leaflets.ndim == 2 else leaflets) == 1
+            xy = apl.membrane.positions[upper][:, :2].copy()
             xy[:, 0] %= box[0]  # wrap into the unit cell so every lipid lands on the grid
             xy[:, 1] %= box[1]
             x_bins = np.linspace(0.0, np.ceil(box[0]), int(np.ceil(box[0])) + 1)
             y_bins = np.linspace(0.0, np.ceil(box[1]), int(np.ceil(box[1])) + 1)
-            proj = ProjectionPlot(xy[:, 0], xy[:, 1], values)
+            proj = ProjectionPlot(xy[:, 0], xy[:, 1], values[upper])
             proj.project_values(bins=(x_bins, y_bins))
             proj.interpolate(method=method)  # 'nearest' -> Voronoi tiles; 'linear' -> smooth
             # Own (wider) axes so the title clears ProjectionPlot's default 3x3" + cbar.
             _fig, _ax = plt.subplots(figsize=(4.6, 3.4))
             proj.plot_projection(ax=_ax, cmap="viridis")
-            proj.ax.set_title(f"{ff} {lipid} — APL, {sub} (rep 1)",
+            proj.ax.set_title(f"{ff} {lipid} — APL, {sub}, upper leaflet (rep 1)",
                               loc="left", weight="bold", fontsize=9)
             if proj.cbar is not None:
                 proj.cbar.set_label(r"APL ($\mathrm{\AA}^2$)")
@@ -227,18 +236,77 @@ def save_area_projections(apl, u, ff, lipid):
                   f"{str(exc)[:80]}", flush=True)
 
 
+def save_lipid_trajectories(apl, u, ff, lipid):
+    """Plot the in-plane (xy) trajectories of every upper-leaflet phosphate over
+    the whole rep-1 trajectory, each lipid a distinct colour, to
+    ``plots/lipprop_lipidtraj_{ff}_{lipid}.png`` -- a visual for lateral
+    diffusion (MSD) and packing (APL).
+
+    One phosphate per lipid (the ``PHOSPHATE`` selection) is followed frame by
+    frame and the paths are unwrapped across periodic boundaries (cumulative
+    minimum-image steps) so each is a continuous walk rather than jumping across
+    the box.  The 64-ish upper-leaflet lipids exceed matplotlib's 10-colour
+    default, so colours come from ``palette.evenly_spaced_cmap`` (evenly
+    hue-spaced at constant lightness -- distinct without implying an order).
+
+    Called before the NoJump transform; PBC unwrapping is done here explicitly,
+    so it does not matter.  A failure is downgraded to a warning."""
+    import matplotlib.pyplot as plt
+    from palette import evenly_spaced_cmap
+    PLOTS.mkdir(parents=True, exist_ok=True)
+    try:
+        leaflets = np.asarray(apl.leaflets)
+        upper = (leaflets[:, 0] if leaflets.ndim == 2 else leaflets) == 1
+        phos = apl.membrane[upper]  # one upper-leaflet phosphate per lipid
+        nfr = u.trajectory.n_frames
+        xy = np.empty((nfr, phos.n_atoms, 2))
+        box = np.empty((nfr, 2))
+        for i, ts in enumerate(u.trajectory):
+            xy[i] = phos.positions[:, :2]
+            box[i] = ts.dimensions[:2]
+        # Unwrap: accumulate minimum-image frame-to-frame displacements.
+        disp = np.diff(xy, axis=0)
+        disp -= box[1:, None, :] * np.round(disp / box[1:, None, :])
+        xy_unwrap = np.empty_like(xy)
+        xy_unwrap[0] = xy[0]
+        xy_unwrap[1:] = xy[0][None] + np.cumsum(disp, axis=0)
+
+        colors = evenly_spaced_cmap(phos.n_atoms).colors
+        fig, ax = plt.subplots(figsize=(6, 6))
+        for j in range(phos.n_atoms):
+            ax.plot(xy_unwrap[:, j, 0], xy_unwrap[:, j, 1],
+                    color=colors[j], lw=0.7, alpha=0.9)
+            ax.plot(xy_unwrap[-1, j, 0], xy_unwrap[-1, j, 1], "o",
+                    color=colors[j], ms=3)  # final position
+        ax.set_aspect("equal")
+        ax.set_xlabel(r"x ($\mathrm{\AA}$)")
+        ax.set_ylabel(r"y ($\mathrm{\AA}$)")
+        ax.set_title(f"{ff} {lipid} — upper-leaflet phosphate trajectories (rep 1)",
+                     fontsize=10)
+        out = PLOTS / f"lipprop_lipidtraj_{ff}_{lipid}.png"
+        fig.savefig(out, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        print(f"    wrote {out.name}", flush=True)
+    except Exception as exc:  # visualisation only -- keep the numbers
+        print(f"    WARNING: lipid-trajectory plot failed for {ff}_{lipid}: "
+              f"{str(exc)[:80]}", flush=True)
+
+
 def analyse(u, ff, lipid, rep):
     """Run all five lipyphilic analyses on one trajectory; return a dict of
-    plot-ready arrays.  For replicate 1 it also writes the APL projection maps."""
+    plot-ready arrays.  For replicate 1 it also writes the APL projection maps
+    and the upper-leaflet lipid-trajectory plot."""
     leaflets = AssignLeaflets(u, lipid_sel=PHOSPHATE)
     leaflets.run()
 
     apl = AreaPerLipid(u, lipid_sel=PHOSPHATE, leaflets=leaflets.leaflets)
     apl.run()
 
-    # APL projection maps (rep 1 only) -- before NoJump, while coords are in-box.
+    # Rep-1 visualisations -- before NoJump, while coords are in-box (the
+    # trajectory plot does its own PBC unwrapping).
     if rep == 1:
         save_area_projections(apl, u, ff, lipid)
+        save_lipid_trajectories(apl, u, ff, lipid)
 
     thick = MembThickness(u, lipid_sel=PHOSPHATE, leaflets=leaflets.leaflets)
     thick.run()

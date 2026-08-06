@@ -275,9 +275,11 @@ def save_lipid_trajectories(apl, u, ff, lipid):
         fig, ax = plt.subplots(figsize=(6, 6))
         for j in range(phos.n_atoms):
             ax.plot(xy_unwrap[:, j, 0], xy_unwrap[:, j, 1],
-                    color=colors[j], lw=0.7, alpha=0.9)
-            ax.plot(xy_unwrap[-1, j, 0], xy_unwrap[-1, j, 1], "o",
-                    color=colors[j], ms=3)  # final position
+                    color=colors[j], lw=0.35, alpha=0.9)
+        # Final positions as one scatter on top of every line (higher zorder),
+        # each with a thin black outline so it reads over its own trace.
+        ax.scatter(xy_unwrap[-1, :, 0], xy_unwrap[-1, :, 1], c=colors, s=12,
+                   edgecolors="black", linewidths=0.4, zorder=3)
         ax.set_aspect("equal")
         ax.set_xlabel(r"x ($\mathrm{\AA}$)")
         ax.set_ylabel(r"y ($\mathrm{\AA}$)")

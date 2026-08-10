@@ -79,8 +79,8 @@ def main():
         means, sds = [], []
         for lip in LIPIDS:
             m, s, n = agg.get((ff, lip), (np.nan, 0.0, 0))
-            means.append(m)
-            sds.append(s)
+            means.append(m * RT_KJ_PER_MOL)   # k_BT/rad^2 -> kJ/mol/rad^2
+            sds.append(s * RT_KJ_PER_MOL)
             if n:
                 any_data = True
         offset = (i - (nff - 1) / 2.0) * w
@@ -91,15 +91,16 @@ def main():
         raise SystemExit("no tilt moduli to plot")
     ax.set_xticks(x)
     ax.set_xticklabels(LIPIDS)
-    ax.set_ylabel(r"tilt modulus $\chi$  ($k_\mathrm{B}T\,\mathrm{rad}^{-2}$)")
+    ax.set_ylabel(r"tilt modulus $\chi$  (kJ mol$^{-1}\,\mathrm{rad}^{-2}$, $T=310$ K)")
     ax.set_title("Lipid tilt modulus by force field")
     ax.legend(frameon=False, loc="upper left")
-    # Fixed y-limit with headroom, then a twin axis in kJ/mol/rad^2 (x RT, 310 K).
-    ymax = max(m + s for (m, s, n) in agg.values() if n) * 1.15
-    ax.set_ylim(0, ymax)
+    # Primary axis in kJ/mol/rad^2 (= chi[k_BT/rad^2] x RT at 310 K); secondary
+    # twin axis keeps the underlying k_BT/rad^2 scale for reference.
+    ymax_kT = max(m + s for (m, s, n) in agg.values() if n) * 1.15
+    ax.set_ylim(0, ymax_kT * RT_KJ_PER_MOL)
     ax2 = ax.twinx()
-    ax2.set_ylim(0, ymax * RT_KJ_PER_MOL)
-    ax2.set_ylabel(r"$\chi$  (kJ mol$^{-1}$ rad$^{-2}$, $T=310$ K)")
+    ax2.set_ylim(0, ymax_kT)
+    ax2.set_ylabel(r"$\chi$  ($k_\mathrm{B}T\,\mathrm{rad}^{-2}$)")
     fig.tight_layout()
     out = PLOTS / "tilt_modulus.png"
     fig.savefig(out, dpi=300)

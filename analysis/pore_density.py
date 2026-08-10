@@ -26,6 +26,14 @@ Writes one ``data/poredens_{ff}_{lipid}.npz`` per run (fixed bin edges, so every
 map is directly comparable):
   ``r_edges``, ``z_edges`` (nm) and one 2-D array per selection name.
 
+Also writes ``data/poredens_counts_{ff}_{lipid}.npz`` -- the **raw per-frame
+count** of atoms inside the chain-coordinate CV cylinder (radius 0.9 nm, height
+2.7 nm, centred on the pore centre) for water oxygens, phosphates, and glycerol
+C2 carbons -- so pore occupancy can be plotted as a trajectory over time
+(``plot_pore_counts.py``).  Keys: ``frame``, ``time_ps``, ``cyl_r_nm``,
+``cyl_h_nm``, and one 1-D count array per selection (``water``, ``phosphorus``,
+``glycerol_C2``).
+
 Run in the MDAnalysis env.  With no arguments it discovers all nine systems the
 same way ``lipid_properties.py`` does -- iterating force field x lipid under
 ``--sims-root`` (default ``~/Simulations``), looking in
@@ -63,6 +71,13 @@ WATER_OXYGEN = {"O", "OW", "OH2", "OW1"}  # water O across TP3 / TIP3 / SOL
 # Fixed bin edges (nm) shared by every run so the 3x3 grids line up.
 R_MAX, DR = 3.0, 0.05    # in-plane radius from the pore centre
 Z_HALF, DZ = 4.5, 0.05   # z relative to the pore centre (boxes here are ~8.2 nm)
+
+# The chain-coordinate CV acts on a cylinder (nm): radius 0.9, height 2.7, centred
+# on the pore centre -> r <= 0.9, |z| <= 1.35.  Alongside the (r, z) density maps
+# we also count the raw number of atoms inside this cylinder per frame, so the
+# occupancy can be plotted as a trajectory over time (plot_pore_counts.py).
+CYL_R, CYL_H = 0.9, 2.7
+COUNT_SELECTIONS = ["water", "phosphorus", "glycerol_C2"]
 
 _CENTER_RE = re.compile(
     r"Cylinder center at \(X/Y/Z\):\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)")
@@ -112,9 +127,16 @@ def process(run_dir, out_dir):
     z_edges = np.arange(-Z_HALF, Z_HALF + DZ, DZ)
     hists = {name: np.zeros((len(z_edges) - 1, len(r_edges) - 1)) for name in sel}
 
+    # Per-frame raw in-cylinder counts (occupancy trajectory).
+    count_names = [name for name in COUNT_SELECTIONS if name in sel]
+    counts = {name: np.zeros(n, dtype=int) for name in count_names}
+    times = np.zeros(n)          # ps, from the trajectory timestamps
+    z_half_cv = CYL_H / 2.0
+
     for i, ts in enumerate(u.trajectory):
         if i >= n:
             break
+        times[i] = ts.time
         cx, cy, cz = centers[i] * 10.0             # nm -> A (mda units)
         box = ts.dimensions[:3]
         for name, g in sel.items():
@@ -127,6 +149,9 @@ def process(run_dir, out_dir):
             z = (pos[:, 2] - cz) / 10.0            # z relative to the pore centre
             h, _, _ = np.histogram2d(z, r, bins=(z_edges, r_edges))
             hists[name] += h
+            if name in counts:                     # atoms inside the CV cylinder
+                counts[name][i] = np.count_nonzero(
+                    (r <= CYL_R) & (np.abs(z) <= z_half_cv))
 
     # Counts -> number density: divide by annular shell volume and frame count.
     shell_area = np.pi * (r_edges[1:] ** 2 - r_edges[:-1] ** 2)   # nm^2, per r-bin
@@ -139,6 +164,15 @@ def process(run_dir, out_dir):
     np.savez_compressed(dest, **out)
     print(f"wrote {dest}  ({ff} {lipid}; {n} frames)  "
           f"selections: {', '.join(hists)}")
+
+    # Per-frame in-cylinder occupancy -> its own npz (frame + time axes, one
+    # raw-count array per selection; CV geometry stored for reference).
+    cdest = out_dir / f"poredens_counts_{ff}_{lipid}.npz"
+    cout = {"frame": np.arange(n), "time_ps": times,
+            "cyl_r_nm": np.array(CYL_R), "cyl_h_nm": np.array(CYL_H)}
+    cout.update(counts)
+    np.savez_compressed(cdest, **cout)
+    print(f"wrote {cdest}  (per-frame counts: {', '.join(count_names)})")
 
 
 def main():

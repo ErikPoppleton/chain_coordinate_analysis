@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """Plot the per-frame **pore-cylinder occupancy** as a trajectory over time --
 the raw number of water oxygens, phosphates, and glycerol C2 carbons inside the
-chain-coordinate CV cylinder (radius 0.9 nm, height 2.7 nm, centred on the pore
-centre), written by ``pore_density.py`` to
+chain-coordinate CV cylinder, written by ``pore_density.py`` to
 ``data/poredens_counts_{ff}_{lipid}.npz``.
 
-A 3x3 grid, lipids across columns (DOPC/DMPC/DMPG) and force fields down rows
-(CHARMM/AMBER/SLipids); within each panel the three selections are overlaid as
-lines vs time.  Water uses the left y-axis (there are far more oxygens than
-lipid atoms); phosphate and C2 share a right y-axis.  Panels with no
-``.npz`` are left blank.  ->  ``plots/poredens_counts.png``.
+Two figure sets are produced, one per z-slab counted by ``pore_density.py``:
+  * ``plots/poredens_counts.png``        -- the **full** CV cylinder (r = 0.9 nm,
+    h = 2.7 nm, |z| <= 1.35 nm);
+  * ``plots/poredens_counts_middle.png`` -- its **middle third** (|z| <= 0.45 nm,
+    the central 9 A -- the pore's narrowest waist), from the ``{name}_mid`` keys.
+
+Each is a 3x3 grid with **atom type down the rows** (water / phosphate /
+glycerol C2) and **lipid across the columns** (DOPC/DMPC/DMPG).  Within each
+panel the three force fields overlay as lines coloured by the ``palette``
+force-field scheme (CHARMM blue / AMBER green / SLipids gold) -- so the top-left
+panel is water occupancy for DOPC with one line per force field.  Each row (atom
+type) shares a y-scale; panels with no data are left blank.
 
 Requires only numpy + matplotlib.
 """
@@ -27,11 +33,11 @@ PLOTS = ROOT / "plots"
 
 LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
-# (npz key, legend label, colour, which y-axis: "left" for water else "right").
-SERIES = [
-    ("water", "water O", "#2171b5", "left"),
-    ("phosphorus", "phosphate P", "#d4a017", "right"),
-    ("glycerol_C2", "glycerol C2", "#0f7d3b", "right"),
+# Rows: (base npz key, y-axis label).  One row per atom type.
+ROWS = [
+    ("water", "water O count"),
+    ("phosphorus", "phosphate P count"),
+    ("glycerol_C2", "glycerol C2 count"),
 ]
 
 
@@ -40,72 +46,68 @@ def load(ff, lipid):
     return np.load(path) if path.exists() else None
 
 
-def main():
-    PLOTS.mkdir(parents=True, exist_ok=True)
-
-    # Gather panels and shared axis limits so rows/cols are comparable.
-    panels = {}
-    for ff, _, _ in FORCEFIELDS:
-        for lipid in LIPIDS:
-            npz = load(ff, lipid)
-            if npz is not None:
-                panels[(ff, lipid)] = npz
-    if not panels:
-        print("skip: no data/poredens_counts_*.npz files found")
+def plot_counts(panels, suffix, title, out_stem):
+    """Draw the atom-type x lipid grid for one z-slab (``suffix`` = '' full
+    cylinder, '_mid' middle third), overlaying the force fields per panel."""
+    keys = {base: base + suffix for base, _ in ROWS}
+    # Per-row (atom-type) shared y-max, and a shared x (time) range.
+    row_max = {}
+    for base, _ in ROWS:
+        k = keys[base]
+        vals = [npz[k].max() for npz in panels.values() if k in npz.files]
+        row_max[base] = max(vals) * 1.1 if vals else 1.0
+    if not any(keys[b] in npz.files for b, _ in ROWS for npz in panels.values()):
+        print(f"skip {out_stem}: no '{suffix or 'full'}' count arrays in the npz files")
         return
+    tmax = max((npz["time_ps"].max() for npz in panels.values()), default=1000.0) / 1000.0
 
-    def axis_max(axis):
-        vals = [npz[k].max() for npz in panels.values()
-                for k, _, _, ax in SERIES if ax == axis and k in npz.files]
-        return max(vals) * 1.1 if vals else 1.0
-
-    left_max, right_max = axis_max("left"), axis_max("right")
-    tmax = max((npz["time_ps"].max() for npz in panels.values()), default=1.0) / 1000.0
-
-    fig, axes = plt.subplots(len(FORCEFIELDS), len(LIPIDS), figsize=(11, 8),
-                             sharex=True)
+    fig, axes = plt.subplots(len(ROWS), len(LIPIDS), figsize=(11, 8), sharex=True)
     handles, labels = [], []
-    for r, (ff, ff_label, _) in enumerate(FORCEFIELDS):
+    for r, (base, ylabel) in enumerate(ROWS):
+        k = keys[base]
         for c, lipid in enumerate(LIPIDS):
             ax = axes[r][c]
-            axr = ax.twinx()
-            ax.set_ylim(0, left_max)
-            axr.set_ylim(0, right_max)
+            ax.set_ylim(0, row_max[base])
             ax.set_xlim(0, tmax)
             if r == 0:
                 ax.set_title(lipid)
             if c == 0:
-                ax.set_ylabel(f"{ff_label}\nwater O count")
+                ax.set_ylabel(ylabel)
             else:
                 ax.tick_params(labelleft=False)
-            if c == len(LIPIDS) - 1:
-                axr.set_ylabel("phosphate / C2 count")
-            else:
-                axr.tick_params(labelright=False)
-            if r == len(FORCEFIELDS) - 1:
+            if r == len(ROWS) - 1:
                 ax.set_xlabel("time (ns)")
-            npz = panels.get((ff, lipid))
-            if npz is None:
-                axr.set_axis_off()
-                continue
-            t = npz["time_ps"] / 1000.0
-            for key, label, colour, which in SERIES:
-                if key not in npz.files:
+            for ff, ff_label, colour in FORCEFIELDS:
+                npz = panels.get((ff, lipid))
+                if npz is None or k not in npz.files:
                     continue
-                target = ax if which == "left" else axr
-                (line,) = target.plot(t, npz[key], color=colour, lw=0.8, label=label)
-                if label not in labels:
+                (line,) = ax.plot(npz["time_ps"] / 1000.0, npz[k],
+                                  color=colour, lw=0.8, label=ff_label)
+                if ff_label not in labels:
                     handles.append(line)
-                    labels.append(label)
+                    labels.append(ff_label)
 
-    fig.suptitle("Pore-cylinder occupancy over time "
-                 "(CV cylinder: r = 0.9 nm, h = 2.7 nm)")
-    fig.legend(handles, labels, loc="upper right", frameon=False, ncol=3)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    out = PLOTS / "poredens_counts.png"
+    fig.suptitle(title, y=0.99)
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.955),
+               frameon=False, ncol=3)
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    out = PLOTS / f"{out_stem}.png"
     fig.savefig(out, dpi=300)
     plt.close(fig)
     print(f"wrote {out}")
+
+
+def main():
+    PLOTS.mkdir(parents=True, exist_ok=True)
+    panels = {(ff, lip): npz for ff, _, _ in FORCEFIELDS for lip in LIPIDS
+              if (npz := load(ff, lip)) is not None}
+    if not panels:
+        print("skip: no data/poredens_counts_*.npz files found")
+        return
+    plot_counts(panels, "", "Pore-cylinder occupancy over time "
+                "(CV cylinder: r = 0.9 nm, h = 2.7 nm)", "poredens_counts")
+    plot_counts(panels, "_mid", "Pore-cylinder occupancy over time "
+                "(middle third: r = 0.9 nm, |z| <= 0.45 nm)", "poredens_counts_middle")
 
 
 if __name__ == "__main__":

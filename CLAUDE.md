@@ -95,11 +95,12 @@ python analysis/make_density_index.py tmp/charmm_DOPC_md.gro         # a subset
 A third, independent branch: for the **pore** simulations (a pore driven open by external forces, then a chain-coordinate *rerun*), it builds cylindrically-averaged **(radius, z) density maps** of selected atoms around the pore centre. Same compute→npz→plot split as the other branches.
 
 ```bash
-# 1. compute (cluster-side, MDAnalysis env) -> data/poredens_{ff}_{lipid}.npz
+# 1. compute (cluster-side, MDAnalysis env) -> data/poredens_{ff}_{lipid}.npz (+ poredens_counts_{ff}_{lipid}.npz)
 conda run -n lipid64 python analysis/pore_density.py            # discover all 9
 conda run -n lipid64 python analysis/pore_density.py tmp/       # one explicit dir
 # 2. plot (anywhere, numpy+matplotlib only) -> plots/poredens_{water,phosphorus,glycerol_c2,midpoint_c}.png
 python3 analysis/plot_pore_density.py
+python3 analysis/plot_pore_counts.py                            # -> plots/poredens_counts.png
 ```
 
 - **Discovery mirrors `lipid_properties.py`**: with no positional args it iterates `--forcefields × --lipids` under `--sims-root` (default `~/Simulations`) and looks in `{ff}_{lipid}/{--run-subdir}/` — default `umbrella23` (the pore run is umbrella window 23, one per system, **no replicates**, hence "all 9"). Positional run dirs override discovery (each must hold the `md.{xtc,gro}` + `rerunerr.log` triple), which is how the local `tmp/` test set (from **amber_DMPC**) is run — so only that panel fills in locally; the other 8 render blank. Missing dirs are skipped with a per-system message.
@@ -113,6 +114,7 @@ python3 analysis/plot_pore_density.py
   - **Full maps** (r 0–3, z ±4.5 nm), all four selections → `poredens_{water,phosphorus,glycerol_c2,midpoint_c}.png`, peak-normalised over the whole map, with a thin dotted **cyan rectangle** outlining the CV cylinder (`CYL_R=0.9`, `CYL_H=2.7` nm → r∈[0,0.9], z∈[−1.35,1.35]).
   - **Zoom maps** restricted to the CV cylinder (`region=(CYL_R, CYL_H/2)`), **water + phosphate only** → `poredens_zoom_{water,phosphorus}.png`, peak-normalised **within the region** (so the zoomed content uses the full colour range) and no rectangle (it *is* the frame).
   Narrow panels drop the edge x-tick under the auto-locator, so ticks are set explicitly (integers 0…3 for the full map; 4 evenly-spaced 0…`r_hi` for the zoom).
+- **Per-frame in-cylinder occupancy** — alongside the density maps, `pore_density.py` also writes `data/poredens_counts_{ff}_{lipid}.npz`: the **raw per-frame count** of atoms inside the chain-coordinate CV cylinder for the three `COUNT_SELECTIONS` (`water` oxygens, `phosphorus`, `glycerol_C2`). Counted over **two z-slabs**: the **full** cylinder (`CYL_R=0.9`, `CYL_H=2.7` nm → r≤0.9, |z|≤1.35 relative to that frame's pore centre) and its **middle third** (|z|≤`CYL_H/6`=0.45 nm, the central 9 Å — the pore's narrowest waist). Keys: `frame`, `time_ps` (from the trajectory timestamps), `cyl_r_nm`/`cyl_h_nm`/`cyl_mid_h_nm`, one 1-D count array per selection for the full cylinder, and a `{name}_mid` array for the middle third. Computed inside the same frame loop as the histograms (both masks reuse the per-frame `r`/`z` already needed for binning). `plot_pore_counts.py` (numpy+matplotlib, `palette`) plots these as occupancy-vs-time trajectories in a **3×3 grid with atom type down the rows** (water/phosphate/glycerol C2) and **lipid across the columns** (DOPC/DMPC/DMPG); within each panel the three force fields overlay as lines in the `palette` colours (CHARMM blue / AMBER green / SLipids gold), each row sharing a y-scale. Two figures: `plots/poredens_counts.png` (full cylinder) and `plots/poredens_counts_middle.png` (middle third, from the `_mid` keys).
 
 ## Lipid tilt modulus with OpenStructure / ost_pymodules (`tilt_convert.py` + `tilt_modulus.py` + `run_tilt.sh` + `plot_tilt_modulus.py`)
 

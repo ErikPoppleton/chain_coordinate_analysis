@@ -20,11 +20,12 @@ lincs_iter           = 1         ; accuracy of LINCS
 lincs_order          = 4         ; also related to accuracy
 
 ; Nonbonded parameters
-rcoulomb             = 1.4       ; short-range electrostatic cutoff (in nm)
+rcoulomb             = 1.5       ; short-range electrostatic cutoff (in nm)
 rvdw                 = 1.5       ; short-range van der Waals cutoff (in nm)
+rvdw-switch          = 1.4
 coulombtype          = PME       ; How to compute coulomb interactions
 vdwtype              = Cut-off   ; How to compute vdw interactions
-vdw-modifier         = force-shift    ; How the cutoff goes to 0 in vdw interactions
+vdw-modifier         = force-switch    ; How the cutoff goes to 0 in vdw interactions
 DispCorr             = EnerPres  ; account for cut-off vdW scheme
 
 ; PME settings

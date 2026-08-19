@@ -33,8 +33,6 @@ export GMX=/u/epoppleton/software/gromacs-chain-coordinate/build/bin/gmx_mpi;
 source ~/software/gromacs-chain-coordinate/build/scripts/GMXRC.bash;
 read X < <(cat ../submit_pull.sh | grep "FREEZE_CYLINDER_X=" | cut -d "=" -f 2);
 read Y < <(cat ../submit_pull.sh | grep "FREEZE_CYLINDER_Y=" | cut -d "=" -f 2);
-#read Z1 Z2 < <(grep "Cylinder spanning" ../slurm.[0-9]*.err | tail -n 1 | tr -s " " | cut -d " " -f 5-6);
-#N_SLICE=$(echo "($Z2 - $Z1) * 10 / 1" | bc)
 export SLICE_COORD_N=27;
 export SLICE_COORD_D=0.1;
 export SLICE_COORD_CYL_R=0.9;
@@ -42,5 +40,5 @@ export SLICE_COORD_FREEZE_CYLINDER_XIREF=0.8
 export SLICE_COORD_FREEZE_CYLINDER_X=$X;
 export SLICE_COORD_FREEZE_CYLINDER_Y=$Y;
 
-$GMX grompp -f umbrella.mdp -t npt.cpt -c npt.gro -r restr.gro -n ../pull.ndx -p ../../topol.top -o md.tpr 
+$GMX grompp -f umbrella.mdp -t npt.cpt -c npt.gro -n ../pull.ndx -p ../topol.top -o md.tpr 
 srun $n_tasks $GMX mdrun -s md.tpr -deffnm md -maxh 23.76 -pin on -bonded cpu -nb gpu -pme gpu -ntomp 10 

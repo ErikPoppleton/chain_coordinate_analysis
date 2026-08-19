@@ -67,6 +67,12 @@ cp ${SCRIPT_DIR}/../setup_files/pull_${FF}.mdp ./pull.mdp
 cp ${SCRIPT_DIR}/../setup_files/submit_pull.sh .
 sed -i "s/LIPID/$LIPID/" submit_pull.sh
 
+# Get the umbrella files too while we're at it
+cp ${SCRIPT_DIR}/../setup_files/umbrella_npt_${FF}.mdp ./umbrella_npt.mdp
+cp ${SCRIPT_DIR}/../setup_files/umbrella_${FF}.mdp ./umbrella.mdp
+cp ${SCRIPT_DIR}/../setup_files/submit_npt.sh .
+cp ${SCRIPT_DIR}/../setup_files/submit_umbrella.sh .
+
 # Change the fixed pore center to (3, 3)
 eval "$(cat submit_pull.sh | grep 'export SLICE')"
 $GMX grompp -f pull.mdp -c npt.gro -p topol.top -n pull.ndx -o pull.tpr

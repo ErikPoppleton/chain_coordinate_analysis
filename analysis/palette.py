@@ -25,13 +25,18 @@ import colorsys
 
 from matplotlib.colors import LinearSegmentedColormap, ListedColormap
 
+from lipiddefs import FF_LABELLED
+
+# Solid categorical colour per force field.
+COLORS = {
+    "charmm": "#2171b5",    # blue
+    "amber": "#d4a017",     # gold / dark yellow  (AMBER is amber)
+    "slipids": "#0f7d3b",   # green
+}
+
 # (key as it appears in the filename prefix, display label, solid colour).
-# One shared order used by every plot.
-FORCEFIELDS = [
-    ("charmm", "CHARMM", "#2171b5"),    # blue
-    ("amber", "AMBER", "#d4a017"),      # gold / dark yellow  (AMBER is amber)
-    ("slipids", "SLipids", "#0f7d3b"),  # green
-]
+# One shared order used by every plot; the keys/labels come from lipiddefs.
+FORCEFIELDS = [(ff, label, COLORS[ff]) for ff, label in FF_LABELLED]
 
 # Light -> dark ramps for the per-replicate gradients, keyed by force field.
 # Ordered light-first so cmap(0.9) is dark and cmap(0.3) is light, matching the

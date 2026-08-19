@@ -17,6 +17,7 @@ the shared colour scheme from ``palette.py``.
 Requires only numpy + matplotlib; run it anywhere (paths derive from __file__).
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -24,12 +25,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from palette import FORCEFIELDS
+from lipiddefs import LIPIDS
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 # (npz stem, figure title, axis label, scale, per_lipid).  The scale rescales
 # samples for display.  per_lipid marks a per-lipid property (area): its npz
@@ -349,17 +350,47 @@ def plot_scd():
     print(f"wrote {out}")
 
 
+# npz stem -> stats.py observable key, for looking up the pymbar t0.
+STEM_TO_STATS_OBS = {"area_per_lipid": "apl", "memb_thickness": "thickness",
+                     "registration": "registration"}
+NS_PER_FRAME = 0.2                     # 200 ps/frame
+
+
+def _t0_rep1(obs):
+    """{system: t0 (frames) for replicate 1} from stats.py's equilibrium-
+    timeseries JSON (pymbar detect_equilibration on the full 500 ns), or {} if
+    the JSON / observable is absent."""
+    if obs is None:
+        return {}
+    p = DATA / "equilibrium_timeseries_stats.json"
+    if not p.exists():
+        return {}
+    recs_by_sys = json.loads(p.read_text())["per_replicate"].get(obs, {})
+    out = {}
+    for sysn, recs in recs_by_sys.items():
+        for r in recs:
+            if int(r["rep"]) == 1:
+                out[sysn] = int(r["t0"])
+    return out
+
+
 def plot_trajectories(stem, title, ylabel, scale, per_lipid):
     """Per-frame trajectory of ``stem`` for replicate 1, as a 3x3 grid: lipids
     across columns (DOPC/DMPC/DMPG), force fields down rows (CHARMM/AMBER/
     SLipids).  A per-lipid property (area) shows the per-frame mean +/- SD over
     lipids; a whole-membrane property (thickness, registration) shows its single
     per-frame value.  All nine panels share the y-axis, so the parameter is
-    directly comparable across force field and lipid."""
+    directly comparable across force field and lipid.
+
+    Each panel marks the pymbar equilibration time ``t0`` for that (force field,
+    lipid) replicate-1 run (dashed line + shaded discarded burn-in), read from
+    ``stats.py``'s JSON -- so the plot shows exactly what was dropped before the
+    reported means/CIs."""
     data = load(stem)
     if data is None:
         print(f"skip {stem} trajectory: {DATA / f'lipprops_{stem}.npz'} not found")
         return
+    t0map = _t0_rep1(STEM_TO_STATS_OBS.get(stem))
 
     fig, axes = plt.subplots(len(FORCEFIELDS), len(LIPIDS), figsize=(13, 9),
                              sharex=True, sharey=True)
@@ -386,6 +417,19 @@ def plot_trajectories(stem, title, ylabel, scale, per_lipid):
                 y = np.ravel(arr)
                 ax.plot(np.arange(y.shape[0]), y, color=color, lw=1.0)
             any_data = True
+            # mark the pymbar equilibration cutoff for this rep-1 run.
+            t0 = t0map.get(f"{ff}_{lipid}")
+            if t0 is not None:
+                nfr = arr.shape[0]
+                if t0 > 0:
+                    ax.axvspan(0, t0, color="0.5", alpha=0.15, lw=0)
+                ax.axvline(t0, color="0.25", ls="--", lw=0.9)
+                right = t0 > 0.6 * nfr
+                ax.text(t0, 0.97, (f"$t_0$={t0 * NS_PER_FRAME:.0f} ns "
+                                   if right else f" $t_0$={t0 * NS_PER_FRAME:.0f} ns"),
+                        transform=ax.get_xaxis_transform(),
+                        ha="right" if right else "left", va="top",
+                        fontsize=7, color="0.25")
     if not any_data:
         plt.close(fig)
         extra = (" (per-lipid arrays must be 2-D -- rerun lipid_properties.py)"
@@ -395,7 +439,8 @@ def plot_trajectories(stem, title, ylabel, scale, per_lipid):
     for ax in axes[-1]:
         ax.set_xlabel("frame")
     fig.supylabel(ylabel)
-    fig.suptitle(f"{title} — per-frame trajectory (replicate 1)")
+    fig.suptitle(f"{title} — per-frame trajectory (replicate 1; "
+                 f"dashed = pymbar $t_0$, shaded = discarded burn-in)")
     fig.tight_layout(rect=(0.02, 0, 1, 0.97))
     out = PLOTS / f"lipprop_traj_{stem}.png"
     fig.savefig(out, dpi=300)

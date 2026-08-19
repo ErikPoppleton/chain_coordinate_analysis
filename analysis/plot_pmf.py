@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 from palette import FORCEFIELDS
+from lipiddefs import LIPIDS
 
 # Project layout: this script lives in analysis/, data in data/, output in plots/.
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +20,6 @@ DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
 # Lipids across the columns; profiles are named "{ff}_{lipid}_profile.xvg".
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 # Each full profile is accompanied by five partial profiles computed from
 # consecutive 20 ns windows (0-20, 20-40, 40-60, 60-80, 80-100 ns), sharing the

@@ -22,16 +22,14 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
+from lipiddefs import FORCEFIELDS, LIPIDS, REPS
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 TRAJ = ROOT / "traj"
 LIPKIT = Path.home() / "software/lipidator-toolkit"
 RESIS = LIPKIT / "build/resis"
 DIRECTORS = LIPKIT / "directors"
-
-FORCEFIELDS = ["charmm", "amber", "slipids"]
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
-REPS = [1, 2, 3]
 
 TILT_RE = re.compile(r"Bilayer Tilt:\s*kappa\s+([-\d.eE]+)\s+kt/nm")
 AREA_RE = re.compile(r"Per Lipid \[bilayer\]:\s+([-\d.eE]+)")

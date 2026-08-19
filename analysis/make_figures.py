@@ -31,6 +31,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# FORCEFIELDS is [(filename key, label), ...] in the shared order.
+from lipiddefs import LIPIDS, FF_LABELLED as FORCEFIELDS
+
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOTS = ROOT / "snapshots"
 PLOTS = ROOT / "plots"
@@ -41,15 +44,7 @@ INKSCAPE_CANDIDATES = [
     "inkscape",
 ]
 
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 SETS = ["last", "close"]
-
-# (filename key, label) -- same force-field order as the plotting scripts.
-FORCEFIELDS = [
-    ("charmm", "CHARMM"),
-    ("amber", "AMBER"),
-    ("slipids", "SLipids"),
-]
 
 FIG_W = 180.0        # final figure width (mm)
 PANEL = 57.5         # panel edge (mm) -- matches the rendered PNGs

@@ -31,12 +31,12 @@ from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.ticker import MaxNLocator
 
 from palette import FORCEFIELDS  # [(key, label, colour), ...]
+from lipiddefs import LIPIDS
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 # Rows: (base npz key, y-axis label).  One row per atom type.
 ROWS = [

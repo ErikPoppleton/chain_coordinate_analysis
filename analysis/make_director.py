@@ -34,11 +34,11 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import make_density_index as mdi
+from lipiddefs import TERM
 
 ROOT = Path(__file__).resolve().parent.parent
 TRAJ = ROOT / "traj"
 DIRECTORS = Path.home() / "software/lipidator-toolkit/directors"
-TERM = {"DOPC": 18, "DMPC": 14, "DMPG": 14}
 
 
 def recipe_positions(ff, lipid):

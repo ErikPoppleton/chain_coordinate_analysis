@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build per-force-field/-lipid GROMACS index files for ``gmx density`` from the
-full (water + ion) ``.gro`` files in ``tmp/``, one ``data/density_{ff}_{lipid}.ndx``
-each.  Groups written:
+full-system (water + ion) ``traj/{ff}_{lipid}.gro`` topologies (one replicate's
+downloaded ``md.gro`` per system), one ``data/density_{ff}_{lipid}.ndx`` each.
+Groups written:
 
     water          all water atoms          (TIP3 / TP3 / SOL)
     sodium         Na+ ions                 (SOD / Na+ / NA)
@@ -31,7 +32,7 @@ strings) so the AMBER ``Na+``/``Cl-`` names don't trip the selection parser.
 Run in the lipyphilic/MDAnalysis env, e.g.::
 
     conda run -n lipid64 python analysis/make_density_index.py
-    python analysis/make_density_index.py tmp/charmm_DOPC_md.gro   # a subset
+    python analysis/make_density_index.py traj/charmm_DOPC.gro   # a subset
 
 Empty groups (an ion species absent from a system) are skipped with a warning,
 since ``gmx density`` errors on an empty group.
@@ -44,22 +45,16 @@ import numpy as np
 import MDAnalysis as mda
 from MDAnalysis.selections.gromacs import SelectionWriter
 
+# Force-field vocabulary lives in lipiddefs; re-exported here because the other
+# index builders import it from this module.
+from lipiddefs import (SCHEME, WATER, SODIUM, MAGNESIUM, CALCIUM,
+                       PHOSPHATE_NAMES as PHOSPHATE,
+                       TAIL_NC, AMBER_HEAD, AMBER_TAIL,
+                       chain_atom_names, lipid_resnames, midpoint_carbon)
+
 ROOT = Path(__file__).resolve().parent.parent
-TMP = ROOT / "tmp"
+TRAJ = ROOT / "traj"          # canonical full-system gros: traj/{ff}_{lipid}.gro
 DATA = ROOT / "data"
-
-WATER = {"TIP3", "TP3", "SOL"}
-SODIUM = {"SOD", "Na+", "NA"}
-MAGNESIUM = {"MG"}
-CALCIUM = {"CAL", "CA"}
-PHOSPHATE = {"P", "P31"}
-
-TAIL_NC = {"DOPC": 18, "DMPC": 14, "DMPG": 14}  # last acyl carbon
-DOUBLE_BOND_UP = 9   # oleoyl is 18:1 cis-Delta9; C9 is the upper (head-side) C=C carbon
-CHAIN_MID = 7        # requested mid-chain carbon for the saturated lipids
-
-AMBER_HEAD = {"DOPC": "PC", "DMPC": "PC", "DMPG": "PGR"}
-AMBER_TAIL = {"DOPC": "OL", "DMPC": "MY", "DMPG": "MY"}
 
 
 def detect(resnames):
@@ -67,14 +62,15 @@ def detect(resnames):
     distinguish CHARMM (TIP3) from SLipids (SOL); AMBER shows OL/MY/TP3."""
     resn = set(resnames)
     if resn & {"OL", "MY"} or "TP3" in resn:
-        ff, scheme = "amber", "amber"
+        ff = "amber"
         lipid = "DOPC" if "OL" in resn else ("DMPG" if "PGR" in resn else "DMPC")
     elif "TIP3" in resn:
-        ff, scheme = "charmm", "single"
+        ff = "charmm"
     elif "SOL" in resn:
-        ff, scheme = "slipids", "single"
+        ff = "slipids"
     else:
         sys.exit(f"cannot detect force field from resnames {sorted(resn)}")
+    scheme = SCHEME[ff]
     if scheme == "single":
         present = [l for l in TAIL_NC if l in resn]
         if len(present) != 1:
@@ -83,19 +79,11 @@ def detect(resnames):
     return ff, scheme, lipid
 
 
-def chain_atom_names(scheme, position):
-    """Acyl-carbon atom name(s) for a chain position, covering both chains."""
-    if scheme == "amber":
-        return {f"C1{position}"}                      # both OL/MY tail residues share it
-    return {f"C2{position}", f"C3{position}"}          # sn-1 (C2x) + sn-2 (C3x)
-
-
 def build_groups(u, scheme, lipid):
     """Return an ordered list of (name, AtomGroup) for the requested groups."""
     resn = u.atoms.resnames
     name = u.atoms.names
-    lipid_resn = ({lipid} if scheme == "single"
-                  else {AMBER_HEAD[lipid], AMBER_TAIL[lipid]})
+    lipid_resn = lipid_resnames(scheme, lipid)
     in_lipid = np.isin(resn, list(lipid_resn))
 
     def by_resname(names):
@@ -115,7 +103,7 @@ def build_groups(u, scheme, lipid):
     # Constant group names (so a density loop needs no per-lipid conditionals);
     # only the underlying carbon position varies: DOPC -> upper C=C carbon (C9),
     # DMPC/DMPG -> mid-chain C7; terminal -> last acyl carbon (C18 / C14).
-    mid = DOUBLE_BOND_UP if lipid == "DOPC" else CHAIN_MID
+    mid = midpoint_carbon(lipid)
     groups.append(("midpoint_C", by_atomname(chain_atom_names(scheme, mid))))
     groups.append(("terminal_C", by_atomname(chain_atom_names(scheme, TAIL_NC[lipid]))))
     return groups
@@ -142,9 +130,9 @@ def process(gro, out_dir):
 
 def main():
     args = sys.argv[1:]
-    files = [Path(a) for a in args] if args else sorted(TMP.glob("*.gro"))
+    files = [Path(a) for a in args] if args else sorted(TRAJ.glob("*.gro"))
     if not files:
-        sys.exit(f"no .gro files (looked in {TMP})")
+        sys.exit(f"no .gro files (looked in {TRAJ})")
     DATA.mkdir(parents=True, exist_ok=True)
     for gro in files:
         if not gro.exists():

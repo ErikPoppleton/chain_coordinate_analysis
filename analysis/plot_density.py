@@ -19,12 +19,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from palette import FORCEFIELDS  # [(key, label, colour), ...]
+from lipiddefs import LIPIDS
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 # Fixed group order + display colour.  Water blue, sodium purple, magnesium
 # green, calcium teal, phosphorus orange; the three carbons in greys darkest

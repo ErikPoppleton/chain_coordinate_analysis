@@ -22,6 +22,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from palette import FORCEFIELDS
+from lipiddefs import LIPIDS
 
 # Project layout: this script lives in analysis/, data in data/, output in plots/.
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +30,6 @@ DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
 # Lipids to plot; profiles are named "{ff}_{lipid}_..._profile.xvg".
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 
 def load_y(path):

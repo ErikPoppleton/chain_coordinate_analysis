@@ -60,16 +60,13 @@ import numpy as np
 import MDAnalysis as mda
 
 import make_density_index as mdi
+from lipiddefs import FORCEFIELDS, LIPIDS, WATER_OXYGEN
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
-FORCEFIELDS = ["charmm", "amber", "slipids"]
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
-
 # Selections to map (subset of make_density_index's groups).
 SELECTIONS = ["water", "phosphorus", "glycerol_C2", "midpoint_C"]
-WATER_OXYGEN = {"O", "OW", "OH2", "OW1"}  # water O across TP3 / TIP3 / SOL
 
 # Fixed bin edges (nm) shared by every run so the 3x3 grids line up.
 R_MAX, DR = 3.0, 0.05    # in-plane radius from the pore centre

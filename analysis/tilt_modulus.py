@@ -20,8 +20,16 @@ Runs under the OpenStructure Python 2.7 environment, e.g.::
     ~/.local/bin/ost analysis/tilt_modulus.py data/tilt_charmm_DMPC
     /path/to/openstructure/bin/python analysis/tilt_modulus.py data/tilt_charmm_DMPC --stride 5
 
-Writes ``data/tilt_moduli.json`` (chi, dchi, n_lipids, n_frames per system) and,
-per system, the library's tilt-distribution / PMF PNGs into ``plots/tilt/``.
+Writes ``data/tilt_moduli.json`` per replicate: the canonical pooled-fit ``chi``
++ its fit error ``dchi``, plus an **autocorrelation-aware within-run error** --
+each run is block-averaged into ``n_blocks`` blocks sized from the decorrelation
+time ``g_var`` of the per-frame tilt spread (via the shared ``autocorr`` engine),
+chi is refit per block with the same estimator, and ``chi_block_sem`` is the SEM
+over blocks.  Also writes ``data/tilt_series_{ff}_{lipid}_{rep}.npz`` (the raw
+per-frame per-lipid tilt array + the ``theta_mean``/``theta_var`` moment series),
+so the block average / batch size can be recomputed without re-running the
+expensive OST tilt pass, and the library's tilt-distribution / PMF PNGs into
+``plots/tilt/``.
 
 The head->tail and neutral-plane selections per lipid:
   * head      = phosphate (CHARMM/SLipids ``P``, AMBER ``P31``)
@@ -33,7 +41,10 @@ import os
 import sys
 import json
 import math
+import shutil
 import argparse
+
+import numpy as np
 
 from ost import io, mol, geom, conop
 
@@ -77,16 +88,20 @@ OST_PYMODULES = os.path.expanduser("~/software/ost_pymodules")
 sys.path.append(OST_PYMODULES)
 import lipid_analysis  # noqa: E402
 
+# Shared pure-numpy autocorrelation engine (analysis/ is on sys.path[0] when this
+# script is run directly).  Used to size the within-run chi block average from
+# the decorrelation time of the per-frame tilt spread -- pymbar isn't importable
+# under the OpenStructure Python 2.7, autocorr is (validated bit-identical to it).
+import autocorr  # noqa: E402
+# WATER_NAME: the per-force-field water resname.  TERM: the last acyl carbon of
+# each chain, per lipid -- the tail reference point is the COM of the last THREE
+# carbons of each chain (six atoms total), per Khelashvili 2013 SI Fig. S2
+# ("three terminal carbon atoms ... six cyan spheres").
+from lipiddefs import WATER_NAME, TERM  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
 PLOTS = os.path.join(ROOT, "plots", "tilt")
-
-WATER_NAME = {"charmm": "TIP3", "amber": "TP3", "slipids": "SOL"}
-
-# Last acyl carbon of each chain, per lipid.  The tail reference point is the
-# COM of the last THREE carbons of each chain (six atoms total) -- per Khelashvili
-# 2013 SI Fig. S2 ("three terminal carbon atoms ... six cyan spheres").
-TERM = {"DOPC": 18, "DMPC": 14, "DMPG": 14}
 
 
 def _tail_carbons(ff, n):
@@ -200,16 +215,80 @@ def analyze(basis, stride=1, density_stride=10, nbins=90,
         normal_dict, head_d, tail_d, None)
 
     tilts = tilt_dict[rname][0]                   # N_lipids x N_frames (radians)
-    tilt_list = [x for row in tilts for x in row]
-    n_lipids = len(tilts)
     key = "%s_%s%s" % (ff, lipid, "_" + rep if rep else "")
+
+    # Regularise to an (n_lipids, n_frames) float array (rows should be equal
+    # length for a flat bilayer; truncate to the shortest if ever ragged).
+    lens = set(len(r) for r in tilts)
+    m = min(lens)
+    T = np.array([list(r)[:m] for r in tilts], dtype=float)   # (n_lipids, n_frames)
+    n_lipids, n_frames = T.shape
+
+    # --- canonical pooled chi (unchanged: fit the whole distribution) ---------
+    tilt_list = [x for row in tilts for x in row]
     chi, dchi, chi_list = lipid_analysis.FitTiltDistribution(
         tilt_list, nbins=nbins, outdir=outdir, filename_basis=key)
-    print("  chi = %.3f +/- %.3f kT  (%d lipids, %d frames)"
-          % (chi, dchi, n_lipids, t.GetFrameCount()))
+
+    # --- per-frame tilt moments (over lipids) ---------------------------------
+    # theta_var(t) -- the per-frame tilt-angle spread -- is the chi-relevant
+    # coordinate (chi ~ inverse width of P(theta)); theta_mean(t) is kept too.
+    # Both are genuine per-frame averages, so their autocorrelation time is a
+    # clean batch size (unlike a per-frame refit chi, which is a biased,
+    # noise-dominated nonlinear statistic).
+    theta_mean_t = T.mean(axis=0)
+    theta_var_t = T.var(axis=0)
+    g_var = autocorr.statistical_inefficiency(theta_var_t)
+    g_mean = autocorr.statistical_inefficiency(theta_mean_t)
+
+    # --- within-run chi error by block-averaging ------------------------------
+    # Blocks are sized from g_var (>= the tilt-spread decorrelation time so they
+    # are ~independent); each block's tilts are pooled and refit with the SAME
+    # estimator as the canonical chi, so the block chis are directly comparable.
+    n_blocks, block_size = autocorr.choose_n_blocks(n_frames, g_var)
+    block_short = block_size < g_var          # too correlated for n_blocks -> optimistic
+    blkdir = os.path.join(outdir, "_blocks")
+    if not os.path.isdir(blkdir):
+        os.makedirs(blkdir)
+    chi_blocks = []
+    for bi, (s, e) in enumerate(autocorr.block_ranges(n_frames, block_size, n_blocks)):
+        sub = [x for row in T[:, s:e] for x in row]
+        try:
+            cb, _, _ = lipid_analysis.FitTiltDistribution(
+                sub, nbins=nbins, outdir=blkdir,
+                filename_basis="%s_b%02d" % (key, bi))
+            if np.isfinite(cb):
+                chi_blocks.append(float(cb))
+        except Exception as exc:              # a degenerate block shouldn't kill the run
+            print("  block %d fit failed: %s" % (bi, exc))
+    shutil.rmtree(blkdir, ignore_errors=True)
+    chi_block_sem = autocorr.block_sem(chi_blocks)
+    chi_block_mean = float(np.mean(chi_blocks)) if chi_blocks else None
+
+    # --- persist the raw per-frame tilts + moments (so the block average can be
+    # recomputed later WITHOUT re-running the expensive OST tilt pass) ---------
+    np.savez(os.path.join(DATA, "tilt_series_%s.npz" % key),
+             tilts=T, theta_mean=theta_mean_t, theta_var=theta_var_t,
+             g_var=np.array(g_var), g_mean=np.array(g_mean),
+             block_size=np.array(block_size), n_blocks=np.array(n_blocks),
+             chi_blocks=np.array(chi_blocks))
+
+    print("  chi = %.3f +/- %.3f kT (pooled fit)  (%d lipids, %d frames)"
+          % (chi, dchi, n_lipids, n_frames))
+    print("  within-run: g_var = %.1f fr -> %d blocks x %d fr%s; "
+          "chi_block = %.3f +/- %.3f kT (SEM over blocks)"
+          % (g_var, n_blocks, block_size, " [block<g: optimistic]" if block_short else "",
+             chi_block_mean if chi_block_mean is not None else float("nan"),
+             chi_block_sem))
     return {"key": key, "ff": ff, "lipid": lipid, "rep": rep,
             "chi_kT": chi, "dchi_kT": dchi, "n_lipids": n_lipids,
-            "n_frames": t.GetFrameCount(), "chi_list": list(chi_list)}
+            "n_frames": n_frames, "chi_list": list(chi_list),
+            # autocorrelation-aware within-run error:
+            "g_var_frames": float(g_var), "g_mean_frames": float(g_mean),
+            "neff_var": float(n_frames / g_var),
+            "block_size": int(block_size), "n_blocks": int(n_blocks),
+            "block_size_lt_g": bool(block_short),
+            "chi_blocks": chi_blocks, "chi_block_mean": chi_block_mean,
+            "chi_block_sem": chi_block_sem}
 
 
 def main():

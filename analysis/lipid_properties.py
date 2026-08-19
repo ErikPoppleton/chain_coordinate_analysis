@@ -41,10 +41,11 @@ S_CD (deuterium) order parameter via g_lomepro
 ----------------------------------------------
 By default the script *also* computes the NMR-comparable S_CD order parameter
 with the external g_lomepro binary (a second step, alongside the lipyphilic npz
-analysis above).  For each system it builds the shared index
-``{ff}_{lipid}/lomepro.ndx`` (``make_order_index.generate``) and runs g_lomepro
-``-order`` in every ``eq{rep}/lomepro/``, then copies the resulting per-chain
-profiles into ``data/{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`` for ``plot_scd``.
+analysis above).  For each system it reads the shared index ``{ff}_{lipid}/lomepro.ndx`` -- a
+*preprocessing* artifact built once by ``make_order_index.py`` -- and runs
+g_lomepro ``-order`` in every ``eq{rep}/lomepro/``, then copies the resulting
+per-chain profiles into ``data/{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`` for
+``plot_scd``.
 
 ``--skip-lomepro`` / ``--skip-lipyphilic`` run just one half; the g_lomepro half
 needs only numpy + the binary (not lipyphilic), so on a bare node use::
@@ -84,24 +85,16 @@ except ImportError as _exc:
     _HAVE_LIPYPHILIC = False
     _LIPYPHILIC_ERR = _exc
 
+# Systems and force-field vocabulary come from lipiddefs.  The phosphate
+# selection (CHARMM/SLipids "P", AMBER "P31") drives leaflet assignment,
+# area-per-lipid, thickness, registration and the MSD reference.
+from lipiddefs import (FORCEFIELDS, LIPIDS, REPS as REPLICATES,
+                       PHOSPHATE_SEL as PHOSPHATE, TAIL_NC,
+                       AMBER_TAIL as AMBER_TAIL_RESN)
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
-
-FORCEFIELDS = ["charmm", "amber", "slipids"]
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
-REPLICATES = [1, 2, 3]
-
-# One phosphorus per lipid in every force field: CHARMM/SLipids name it "P",
-# AMBER (Lipid17) names it "P31".  This single selection drives leaflet
-# assignment, area-per-lipid, thickness, registration and the MSD reference.
-PHOSPHATE = "name P P31"
-
-# Carbons per acyl tail: DOPC is oleoyl (18:1), DMPC/DMPG are myristoyl (14:0).
-TAIL_NC = {"DOPC": 18, "DMPC": 14, "DMPG": 14}
-# AMBER splits each lipid into a head residue + two tail residues; the tail
-# resname is the acyl species.
-AMBER_TAIL_RESN = {"DOPC": "OL", "DMPC": "MY", "DMPG": "MY"}
 
 
 def tail_selections(ff, lipid):
@@ -362,15 +355,52 @@ def run_one(job):
     return ff, lipid, rep, analyse(u, ff, lipid, rep)
 
 
+def read_order_index(path, lipid):
+    """Read a ``make_order_index.py`` index and return ``(nlip, unsat)`` --
+    g_lomepro's ``-lip_num`` and ``-unsat``.
+
+    The index is written per lipid, so the ``sn1`` group holds one chain per
+    lipid of ``TAIL_NC[lipid]`` atoms (carbonyl C1 + C2..CN); dividing gives the
+    lipid count.  A ``sn1_double_bond`` group is present only for the
+    unsaturated lipids, and is always the two sp2 carbons per lipid -> ``-unsat 2``.
+    Raises ``ValueError`` if the file is not such an index."""
+
+    counts, current = {}, None
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if line.startswith("["):
+                current = line.strip("[] ").strip()
+                counts[current] = 0
+            elif line and current is not None:
+                counts[current] += len(line.split())
+
+    missing = [g for g in ("Membrane", "sn1", "sn2") if g not in counts]
+    if missing:
+        raise ValueError("missing group(s): " + ", ".join(missing))
+    if lipid not in TAIL_NC:
+        raise ValueError(f"unknown lipid {lipid}")
+    per_chain = TAIL_NC[lipid]
+    nlip, rem = divmod(counts["sn1"], per_chain)
+    if rem or nlip == 0:
+        raise ValueError(f"sn1 has {counts['sn1']} atoms, not a multiple of "
+                         f"{per_chain} ({lipid} chain length)")
+    if counts["sn2"] != counts["sn1"]:
+        raise ValueError(f"sn1/sn2 sizes differ ({counts['sn1']} vs {counts['sn2']})")
+    unsat = 2 if "sn1_double_bond" in counts else 0
+    return nlip, unsat
+
+
 def run_lomepro(args):
     """Run g_lomepro's ``-order`` (S_CD deuterium order parameter) analysis in
     every ``eq{rep}/lomepro/`` directory.
 
-    For each ``{ff}_{lipid}`` system this (re)generates the shared order index
-    ``{ff}_{lipid}/lomepro.ndx`` from a replicate's ``memb.gro`` (via
-    ``make_order_index.generate``), then per replicate creates a fresh
-    ``eq{rep}/lomepro/`` (overwriting any previous one) and runs, from the
-    ``eq{rep}`` directory::
+    For each ``{ff}_{lipid}`` system this reads the pre-built order index
+    ``{ff}_{lipid}/lomepro.ndx`` (generated separately by
+    ``make_order_index.py`` from a replicate's ``memb.gro`` -- serials must
+    match the waters-stripped ``inbox.xtc``; a system without one is skipped),
+    then per replicate creates a fresh ``eq{rep}/lomepro/`` (overwriting any
+    previous one) and runs, from the ``eq{rep}`` directory::
 
         echo "<groups>" | g_lomepro_static -f inbox.xtc -n ../lomepro.ndx \\
             -s memb.gro -lip_num <N> [-unsat 2] -order lomepro/scd.out
@@ -385,7 +415,6 @@ def run_lomepro(args):
     ``<prefix>/share/gromacs/top``)."""
     import shutil
     import subprocess
-    from make_order_index import generate
 
     binary = Path(args.lomepro_bin)
     if not binary.exists():
@@ -414,22 +443,25 @@ def run_lomepro(args):
             if not system_dir.is_dir():
                 print(f"skip {ff}_{lipid}: {system_dir} not found")
                 continue
-            # The index is shared across replicates (identical atom order), so
-            # build it once from the first replicate that has a memb.gro.  It must
-            # come from memb.gro (not md.gro) so the serials match the
-            # waters-stripped inbox.xtc that g_lomepro reads.
-            gro = next((system_dir / f"eq{r}" / "memb.gro" for r in args.reps
-                        if (system_dir / f"eq{r}" / "memb.gro").exists()), None)
-            if gro is None:
-                print(f"skip {ff}_{lipid}: no eq*/memb.gro to build the index from")
-                continue
+            # The index is a preprocessing artifact (make_order_index.py, run
+            # once per system and copied here); it is shared across replicates
+            # because their atom order is identical.
             ndx = system_dir / "lomepro.ndx"
-            info = generate(str(gro), out=str(ndx), ff=ff, lipid=lipid)
+            if not ndx.exists():
+                print(f"skip {ff}_{lipid}: {ndx} not found -- build it with "
+                      f"analysis/make_order_index.py from a replicate's memb.gro "
+                      f"and copy it to {system_dir}/lomepro.ndx")
+                continue
+            try:
+                nlip, unsat = read_order_index(ndx, lipid)
+            except ValueError as exc:
+                print(f"skip {ff}_{lipid}: {ndx} is not a usable order index ({exc})")
+                continue
             groups = "Membrane sn1 sn2"
-            if info["unsat"]:
+            if unsat:
                 groups += " sn1_double_bond sn2_double_bond"
-            print(f"{ff}_{lipid}: wrote {ndx.name} "
-                  f"({info['nlip']} lipids, -unsat {info['unsat']})")
+            print(f"{ff}_{lipid}: using {ndx} "
+                  f"({nlip} lipids, -unsat {unsat})")
 
             for rep in args.reps:
                 run_dir = system_dir / f"eq{rep}"
@@ -444,10 +476,10 @@ def run_lomepro(args):
                     shutil.rmtree(lome)          # overwrite a previous run
                 lome.mkdir()
                 cmd = [str(binary), "-f", args.traj, "-n", "../lomepro.ndx",
-                       "-s", "memb.gro", "-lip_num", str(info["nlip"]),
+                       "-s", "memb.gro", "-lip_num", str(nlip),
                        "-order", "lomepro/scd.out"]
-                if info["unsat"]:
-                    cmd += ["-unsat", str(info["unsat"])]
+                if unsat:
+                    cmd += ["-unsat", str(unsat)]
                 print(f"  eq{rep}: running g_lomepro ...", flush=True)
                 proc = subprocess.run(cmd, input=groups + "\n", text=True,
                                       cwd=str(run_dir), capture_output=True, env=env)

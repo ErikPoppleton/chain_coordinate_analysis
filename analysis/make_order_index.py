@@ -51,13 +51,23 @@ Atom naming (verified geometrically against ``snapshots/*.gro``)
 
 Usage
 -----
-    python3 analysis/make_order_index.py md.gro                 # auto-detect
-    python3 analysis/make_order_index.py md.gro -o order.ndx
+    python3 analysis/make_order_index.py                        # every traj/*.gro
+    python3 analysis/make_order_index.py traj/charmm_DOPC.gro    # a subset
+    python3 analysis/make_order_index.py traj/amber_DOPC.gro -o other.ndx
     python3 analysis/make_order_index.py md.gro --ff amber --lipid DOPC
 
-Index serials are 1-based positions in the file, i.e. GROMACS atom serials, so
-generate the ``.ndx`` from the *same* structure whose atom order matches the
-trajectory you pass to g_lomepro (``md.gro`` matches ``inbox.xtc``).
+With no arguments it builds one index per ``traj/{ff}_{lipid}.gro`` (the
+downloaded full-system topologies, water and ions included) into
+``data/order_{ff}_{lipid}.ndx``; copy each one cluster-side as
+``{ff}_{lipid}/lomepro.ndx`` for ``lipid_properties.py``.
+
+Index serials are 1-based positions in the file, i.e. GROMACS atom serials.
+The full-system ``.gro`` works even though g_lomepro reads the *waters-stripped*
+``inbox.xtc`` because the lipids are the leading contiguous block of the file
+(water and ions follow), so a lipid atom has the same serial in both -- the
+index is byte-identical to one built from the lipid-only ``memb.gro``
+(verified for all nine systems).  ``generate()`` asserts that block layout and
+refuses to write an index that would not match.
 
 Requires only numpy + the standard library.
 """
@@ -68,17 +78,17 @@ from pathlib import Path
 
 import numpy as np
 
-# Aliphatic carbons per acyl chain, counting the carbonyl as C1 (so a 14:0 tail
-# is C1..C14).  DOPC is oleoyl (18:1), DMPC/DMPG are myristoyl (14:0).
-TAIL_NC = {"DOPC": 18, "DMPC": 14, "DMPG": 14}
-# cis double-bond position: carbons (d, d+1) are the two sp2 carbons.  Oleoyl is
-# Delta9 -> C9=C10.  Saturated lipids are absent from this dict.
-DOUBLE_BOND = {"DOPC": 9}
+# Chain lengths (TAIL_NC), double-bond positions and the force-field residue
+# vocabulary come from lipiddefs; re-exported because lipid_properties.py reads
+# TAIL_NC off this module.
+from lipiddefs import (FORCEFIELDS, TAIL_NC, DOUBLE_BOND, AMBER_HEAD,
+                       AMBER_TAIL, PHOSPHATE_NAMES, n_unsat)
 
-# Force-field residue vocabulary.
-AMBER_HEAD = {"DOPC": "PC", "DMPC": "PC", "DMPG": "PGR"}
-AMBER_TAIL = {"DOPC": "OL", "DMPC": "MY", "DMPG": "MY"}
-PHOSPHATE_NAMES = {"P", "P31"}  # CHARMM/SLipids "P", AMBER "P31"
+# Index files all live in the repo's data/ directory (matching make_density_index
+# / make_tail_index), so a bare invocation never litters the working directory.
+ROOT = Path(__file__).resolve().parent.parent
+DATA = ROOT / "data"
+TRAJ = ROOT / "traj"
 
 
 def read_gro(path):
@@ -119,10 +129,22 @@ def split_residues(atoms):
 
 
 def detect(atoms):
-    """Infer (scheme, lipid) from the residue names present.  CHARMM and SLipids
-    share the single-residue naming scheme, so only 'amber' vs 'single' matters
-    for building the index; the lipid identity sets tail length / unsaturation."""
+    """Infer (scheme, lipid, ff) from the residue names present.  CHARMM and
+    SLipids share the single-residue naming scheme, so only 'amber' vs 'single'
+    matters for building the index; the lipid identity sets tail length /
+    unsaturation.  ``ff`` is only resolvable when the structure still has its
+    water (TIP3 -> CHARMM, SOL -> SLipids, TP3/OL/MY -> AMBER), as the
+    full-system ``traj/{ff}_{lipid}.gro`` does; it is ``None`` for a
+    waters-stripped lipid-only structure, where CHARMM and SLipids look alike."""
     resn = {a[1] for a in atoms}
+    if resn & {"TIP3"}:
+        det_ff = "charmm"
+    elif resn & {"SOL"}:
+        det_ff = "slipids"
+    elif resn & {"OL", "MY", "TP3"}:
+        det_ff = "amber"
+    else:
+        det_ff = None
     if resn & {"OL", "MY"}:
         scheme = "amber"
         lipid = "DOPC" if "OL" in resn else ("DMPG" if "PGR" in resn else "DMPC")
@@ -133,7 +155,7 @@ def detect(atoms):
             sys.exit("could not detect a single lipid resname (found "
                      f"{present or 'none'}); pass --ff/--lipid explicitly")
         lipid = present[0]
-    return scheme, lipid
+    return scheme, lipid, det_ff
 
 
 def _pick(res_map, names, ctx):
@@ -228,16 +250,17 @@ def write_group(fh, name, serials):
 
 def generate(structure, out=None, ff=None, lipid=None):
     """Build the g_lomepro order-parameter index for ``structure``, write it to
-    ``out`` (default ``order_{ff}_{lipid}.ndx``), and return a dict describing it:
+    ``out`` (default ``data/order_{ff}_{lipid}.ndx``), and return a dict describing it:
     ``ff``, ``lipid``, ``nlip`` (lipid count = g_lomepro's ``-lip_num``), ``unsat``
     (0 or 2, g_lomepro's ``-unsat``), ``per_chain`` (atoms per sn-1/sn-2 chain),
     ``tail_nc`` and ``out``.  ``ff``/``lipid`` override autodetection.
 
     Importable so the pipeline (``lipid_properties.py --lomepro``) can produce the
-    shared ``lomepro.ndx`` for a system without shelling out."""
+    shared ``data/lomepro_{ff}_{lipid}.ndx`` for a system without shelling out."""
     atoms = read_gro(structure)
-    scheme, det_lipid = detect(atoms)
+    scheme, det_lipid, det_ff = detect(atoms)
     lipid = lipid or det_lipid
+    ff = ff or det_ff
     if ff:
         scheme = "amber" if ff == "amber" else "single"
     ff_label = ff or ("amber" if scheme == "amber" else "charmm/slipids")
@@ -255,8 +278,20 @@ def generate(structure, out=None, ff=None, lipid=None):
         sys.exit("chains are not uniform across lipids -- broken/incomplete "
                  "residues in the structure?")
 
-    out = Path(out) if out else Path(f"order_{ff_label.replace('/', '_')}_{lipid}.ndx")
-    unsat = 2 if lipid in DOUBLE_BOND else 0
+    # g_lomepro reads the waters-stripped inbox.xtc, whose serials are the
+    # full-system ones only while the lipids are a contiguous block at the very
+    # front of the file (true for every system here -- water and ions follow).
+    if list(membrane) != list(range(1, len(membrane) + 1)):
+        sys.exit(f"{structure}: lipid atoms are not the leading contiguous block "
+                 "(serials 1..N), so the index would not match the "
+                 "waters-stripped trajectory g_lomepro reads")
+
+    if out:
+        out = Path(out)
+    else:
+        out = DATA / f"order_{ff_label.replace('/', '_')}_{lipid}.ndx"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    unsat = n_unsat(lipid)
     with open(out, "w") as fh:
         write_group(fh, "Membrane", membrane)
         write_group(fh, "Phosphates", phosphates(atoms))
@@ -269,19 +304,8 @@ def generate(structure, out=None, ff=None, lipid=None):
             "per_chain": (per1, per2), "tail_nc": TAIL_NC[lipid], "out": out}
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("structure", help="GROMACS .gro whose atom order matches the "
-                                       "trajectory (e.g. md.gro)")
-    ap.add_argument("-o", "--out", help="output .ndx (default: order_{ff}_{lipid}.ndx)")
-    ap.add_argument("--ff", choices=["charmm", "amber", "slipids"],
-                    help="override force-field detection")
-    ap.add_argument("--lipid", choices=list(TAIL_NC),
-                    help="override lipid detection")
-    args = ap.parse_args()
-
-    info = generate(args.structure, out=args.out, ff=args.ff, lipid=args.lipid)
+def report(info):
+    """Print what an index contains + the g_lomepro invocation it implies."""
     per1, per2 = info["per_chain"]
     nc = info["tail_nc"]
     print(f"wrote {info['out']}")
@@ -295,6 +319,34 @@ def main():
         order += ["sn1_double_bond", "sn2_double_bond"]
     print("  group order g_lomepro will prompt for (order-parameter part):")
     print("    " + " -> ".join(order))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("structure", nargs="*",
+                    help="GROMACS .gro whose atom order matches the trajectory "
+                         f"(default: every {TRAJ.name}/*.gro)")
+    ap.add_argument("-o", "--out", help="output .ndx (default: "
+                                        "data/order_{ff}_{lipid}.ndx); only "
+                                        "valid with a single structure")
+    ap.add_argument("--ff", choices=FORCEFIELDS,
+                    help="override force-field detection")
+    ap.add_argument("--lipid", choices=list(TAIL_NC),
+                    help="override lipid detection")
+    args = ap.parse_args()
+
+    gros = [Path(a) for a in args.structure] if args.structure else sorted(
+        p for p in TRAJ.glob("*.gro") if "inbox" not in p.name)
+    if not gros:
+        sys.exit(f"no .gro files found (looked in {TRAJ})")
+    if args.out and len(gros) > 1:
+        sys.exit("-o only makes sense with a single structure")
+
+    for gro in gros:
+        report(generate(str(gro), out=args.out, ff=args.ff, lipid=args.lipid))
+    print("\nCopy each index cluster-side as {ff}_{lipid}/lomepro.ndx "
+          "(next to the eq{rep} dirs) before running lipid_properties.py.")
 
 
 if __name__ == "__main__":

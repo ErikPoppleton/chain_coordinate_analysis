@@ -27,12 +27,11 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import make_density_index as mdi
+from lipiddefs import FORCEFIELDS, LIPIDS
 
 ROOT = Path(__file__).resolve().parent.parent
 TRAJ = ROOT / "traj"
 DATA = ROOT / "data"
-FORCEFIELDS = ["charmm", "amber", "slipids"]
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 
 def first_atoms(gro):

@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from palette import FORCEFIELDS, CMAPS
+from lipiddefs import LIPIDS
 
 # Project layout: this script lives in analysis/, data in data/, output in plots/.
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +20,6 @@ DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
 # Lipids to plot; data files are named "{ff}_{lipid}_close{rep}_pullx.xvg".
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 N_REP = 10          # replicates per force field
 STRIDE = 5          # subsample factor (2.5M points/file is more than a plot needs)

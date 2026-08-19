@@ -7,12 +7,22 @@ methods (OpenStructure/ost_pymodules and the Lipidator/ReSiS toolkit).  The
 pore-formation PMFs, pore cylindrical density maps, and pore-closure
 trajectories are deliberately excluded (they are not equilibrium quantities).
 
-Every cell is ``mean +/- SD`` where -- following the project convention -- each
-replicate is first reduced to a single scalar (mean over frames / lipids /
-carbons / chains) and the mean and **population SD are taken across the three
-replicates** (autocorrelated frames would otherwise give a pseudo-replicated,
-hairline-thin error bar).  The tilt moduli are read straight from their summary
-JSONs, which already apply this same convention.
+Error scheme (per column, by what data is available):
+  * The **per-frame lipyphilic observables** (APL, d_HH, d_HC) carry a
+    **hierarchical 95% confidence interval** (``autocorr.hierarchical_ci``):
+    each replicate contributes an autocorrelation-limited within-run SEM
+    (SD/sqrt(Neff), Neff = N/g via the statistical inefficiency; Chodera 2016),
+    and the grand-mean SE takes ``max(between_sd^2, within_sem^2)/n`` -- the
+    pooled pseudoreplication limit where the replicates agree, the honest
+    replicate-spread CI where they do not (so AMBER/SLipids DMPG are not falsely
+    tightened).  The point estimate is unchanged (grand mean over frames & reps).
+  * The **tilt moduli** (chi, kappa) also get a hierarchical 95% CI, but from
+    pre-computed per-replicate estimates: each run yields a scalar plus a
+    block-averaged within-run SEM (``chi_block_sem`` in ``tilt_moduli.json``,
+    ``kappa_block_sem`` in ``lipidator_blocks.json``), combined with the
+    replicate spread the same ``max(between^2, within^2)`` way.
+  * **D and <-S_CD>** keep ``mean +/- SD`` across the three replicate scalars --
+    a single fitted scalar / profile per run, with no within-run error series.
 
 Inputs (all in ``data/``):
   * ``lipprops_area_per_lipid.npz``   -- APL  (per-rep key ``{ff}_{lipid}_eq{n}``, 2-D frames x lipids)
@@ -37,16 +47,70 @@ from pathlib import Path
 
 import numpy as np
 
+import autocorr
+from lipiddefs import FF_LABELLED as FORCEFIELDS, LIPIDS, REPS
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
-FORCEFIELDS = [("charmm", "CHARMM"), ("amber", "AMBER"), ("slipids", "SLipids")]
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
-REPS = [1, 2, 3]
+
+def series_reps(npz, tmpl, ff, lipid, transform):
+    """[per-frame series per rep] from ``npz`` under keys ``tmpl % (ff,lipid,n)``,
+    each mapped through ``transform`` (e.g. mean-over-lipids, Angstrom->nm)."""
+    out = []
+    for n in REPS:
+        k = tmpl % (ff, lipid, n)
+        out.append(transform(np.asarray(npz[k])) if k in npz.files else None)
+    return out
+
+
+def ci_cell(series_list, t0s=None):
+    """(mean, 95% CI half-width) from the hierarchical (autocorrelation-aware)
+    estimator, or None -- for the per-frame observables (APL/d_HH/d_HC).
+    ``t0s`` are the per-replicate pymbar equilibration cutoffs (burn-in dropped
+    before the mean and g are estimated, per Chodera 2016)."""
+    r = autocorr.hierarchical_ci(series_list, t0s=t0s)
+    return (r["mean"], r["ci_half"]) if r else None
+
+
+# stats.py observable name for each per-frame table column.
+STATS_OBS = {"apl": "apl", "thick": "thickness", "dhc": "dhc"}
+
+
+def load_t0map():
+    """{(stats_obs, system, rep): t0} from stats.py's equilibrium-timeseries JSON
+    (pymbar ``detect_equilibration``).  Returns None (no burn-in trimming) if the
+    JSON is absent -- so run ``stats.py`` first for the de-biased means/CIs."""
+    p = DATA / "equilibrium_timeseries_stats.json"
+    if not p.exists():
+        print("note: %s absent -> equilibrium CIs computed WITHOUT burn-in "
+              "trimming; run 'conda run -n base python analysis/stats.py' first "
+              "for pymbar equilibration detection." % p.name)
+        return None
+    d = json.loads(p.read_text())["per_replicate"]
+    m = {}
+    for obs, systems in d.items():
+        for sysn, recs in systems.items():
+            for r in recs:
+                m[(obs, sysn, int(r["rep"]))] = int(r["t0"])
+    return m
+
+
+def t0_reps(t0map, col, ff, lipid):
+    """Per-replicate t0 list for table column ``col``, or None if unavailable."""
+    if t0map is None or col not in STATS_OBS:
+        return None
+    sysn = "%s_%s" % (ff, lipid)
+    return [t0map.get((STATS_OBS[col], sysn, n), 0) for n in REPS]
 
 
 def summarise_reps(per_rep):
-    """[scalar per rep] -> (mean, population SD) or None if empty."""
+    """[scalar per rep] -> (mean, population SD) or None if empty.
+
+    Retained for the *fitted* quantities (D, <-S_CD>, chi, kappa) that have no
+    per-frame series for the autocorrelation-aware CI -- their error stays the
+    SD across replicates (chi/kappa additionally have block SEMs available in
+    their per-rep JSONs once the tilt/lipidator block runs complete)."""
     vals = [v for v in per_rep if v is not None and np.isfinite(v)]
     if not vals:
         return None
@@ -78,50 +142,81 @@ def scd_rep_scalars(ff, lipid):
     return out
 
 
+RT_310 = 2.577          # kJ/mol at 310 K (chi is per-lipid k_BT/rad^2 -> kJ/mol/rad^2)
+
+
+def moduli_ci(perrep, ff, lipid, val_key, sem_key):
+    """(mean, hierarchical-95%-CI half-width) in kJ/mol units for a tilt modulus,
+    from its per-replicate JSON (value + block-averaged within-run SEM, both in
+    k_BT units -> * RT).  Combines the per-rep block SEMs (within-run) with the
+    replicate spread (between-run) via ``autocorr.hierarchical_ci_from_estimates``
+    -- the same estimator the per-frame observables use.  Returns None if absent."""
+    if perrep is None:
+        return None
+    means, sems, neffs = [], [], []
+    for n in REPS:
+        rec = perrep.get("%s_%s_%d" % (ff, lipid, n))
+        if rec is None or rec.get(val_key) is None:
+            means.append(None); sems.append(float("nan")); neffs.append(None)
+            continue
+        means.append(rec[val_key] * RT_310)
+        s = rec.get(sem_key)
+        sems.append(s * RT_310 if s is not None else float("nan"))
+        neffs.append(rec.get("n_blocks"))
+    r = autocorr.hierarchical_ci_from_estimates(means, sems, neffs)
+    return (r["mean"], r["ci_half"]) if r else None
+
+
 def load():
     need = ["lipprops_area_per_lipid.npz", "lipprops_memb_thickness.npz",
-            "lipprops_lateral_diffusion.npz", "tilt_moduli_summary.json",
-            "lipidator_moduli_summary.json"]
+            "lipprops_lateral_diffusion.npz", "tilt_moduli.json"]
     missing_files = [f for f in need if not (DATA / f).exists()]
     if missing_files:
         raise SystemExit("missing input files: %s" % ", ".join(missing_files))
     npz = {k: np.load(DATA / ("lipprops_%s.npz" % k))
            for k in ["area_per_lipid", "memb_thickness", "lateral_diffusion"]}
-    tilt = json.load(open(DATA / "tilt_moduli_summary.json"))
-    lipd = json.load(open(DATA / "lipidator_moduli_summary.json"))
+    # per-replicate moduli (chi + block SEM; kappa_full + block SEM) for the
+    # hierarchical CI -- not the mean/SD summary JSONs.
+    tiltrep = json.load(open(DATA / "tilt_moduli.json"))
+    lipblk = (json.load(open(DATA / "lipidator_blocks.json"))
+              if (DATA / "lipidator_blocks.json").exists() else None)
     # d_HC (hydrophobic core, lipyphilic first-tail-carbon metric); optional.
     ct = (np.load(DATA / "core_thickness.npz")
           if (DATA / "core_thickness.npz").exists() else None)
-    return npz, tilt, lipd, ct
+    return npz, tiltrep, lipblk, ct
 
 
 def collect():
-    npz, tilt, lipd, ct = load()
+    npz, tiltrep, lipblk, ct = load()
+    t0map = load_t0map()          # pymbar equilibration cutoffs (per obs/system/rep)
     rows = {}          # (ff, lipid) -> {param: (mean, sd) or None}
     missing = []       # (ff, lipid, param) with no data
     for ff, _ in FORCEFIELDS:
         for lipid in LIPIDS:
             cell = {}
-            # --- lipyphilic ---
-            cell["apl"] = summarise_reps(rep_scalar_from_npz(
-                npz["area_per_lipid"], ff, lipid, lambda a: float(a.mean())))
-            cell["thick"] = summarise_reps(rep_scalar_from_npz(
-                npz["memb_thickness"], ff, lipid, lambda a: float(a.mean()) / 10.0))  # A -> nm
-            # d_HC: first-tail-carbon MembThickness, per-rep mean (already nm).
-            cell["dhc"] = (summarise_reps(
-                [float(ct[key].mean()) if (key := "%s_%s_lipy_rep%d" % (ff, lipid, n))
-                 in ct.files else None for n in REPS]) if ct is not None else None)
+            # --- lipyphilic (per-frame observables -> hierarchical 95% CI) ---
+            # APL per frame = mean over lipids; d_HH per frame (A->nm); d_HC per
+            # frame (already nm).  The point estimate is unchanged (grand mean
+            # over frames & reps); only the error becomes the autocorrelation-
+            # aware CI in place of the SD across replicate means.
+            cell["apl"] = ci_cell(series_reps(
+                npz["area_per_lipid"], "%s_%s_eq%d", ff, lipid, lambda a: a.mean(axis=1)),
+                t0_reps(t0map, "apl", ff, lipid))
+            cell["thick"] = ci_cell(series_reps(
+                npz["memb_thickness"], "%s_%s_eq%d", ff, lipid, lambda a: a.astype(float) / 10.0),
+                t0_reps(t0map, "thick", ff, lipid))
+            cell["dhc"] = (ci_cell(series_reps(
+                ct, "%s_%s_lipy_rep%d", ff, lipid, lambda a: a.astype(float)),
+                t0_reps(t0map, "dhc", ff, lipid))
+                if ct is not None else None)
             dkey = "%s_%s_D" % (ff, lipid)
             cell["diff"] = (summarise_reps([v * 1e8 for v in npz["lateral_diffusion"][dkey]])
                             if dkey in npz["lateral_diffusion"].files else None)  # cm^2/s -> um^2/s
             # --- g_lomepro ---
             cell["scd"] = summarise_reps(scd_rep_scalars(ff, lipid))
-            # --- tilt moduli (already mean/SD over reps in the JSONs) ---
-            k = "%s_%s" % (ff, lipid)
-            cell["chi"] = ((tilt[k]["chi_kJ_per_mol"], tilt[k]["sd_kJ_per_mol"])
-                           if k in tilt else None)
-            cell["kappa"] = ((lipd[k]["tilt_kJ_per_mol_nm2"], lipd[k]["sd_kJ_per_mol_nm2"])
-                             if k in lipd else None)
+            # --- tilt moduli: hierarchical CI from per-rep value + block SEM ---
+            cell["chi"] = moduli_ci(tiltrep, ff, lipid, "chi_kT", "chi_block_sem")
+            cell["kappa"] = moduli_ci(lipblk, ff, lipid, "kappa_full", "kappa_block_sem")
             rows[(ff, lipid)] = cell
             for p, v in cell.items():
                 if v is None:
@@ -215,7 +310,15 @@ def build_latex(rows):
     lines.append("\\bottomrule")
     lines.append("\\end{tabular}")
     lines.append("\\caption{Equilibrium membrane properties by lipid and force field "
-                 "(mean $\\pm$ SD over three replicate simulations). "
+                 "(mean $\\pm$ uncertainty over three replicate simulations). "
+                 "The uncertainty is a hierarchical $95\\%$ confidence interval "
+                 "combining each replicate's within-run error with the between-replicate "
+                 "spread: for the per-frame observables (APL, $d_{\\mathrm{HH}}$, "
+                 "$d_{\\mathrm{HC}}$) the within-run error is the autocorrelation-limited "
+                 "standard error (statistical inefficiency $g$\\cite{chodera2016simple}), "
+                 "and for the tilt moduli ($\\chi$, $\\kappa_\\theta$) it is a "
+                 "block-averaged SEM; for $D$ and $\\langle -S_{CD}\\rangle$ (single fitted "
+                 "scalar / profile per run) it is the SD across the three replicates. "
                  "$d_{\\mathrm{HH}}$: phosphate--phosphate bilayer thickness; "
                  "$d_{\\mathrm{HC}}$: hydrophobic-core thickness (first-tail-carbon "
                  "MembThickness; agrees with the tail mass-density width at "

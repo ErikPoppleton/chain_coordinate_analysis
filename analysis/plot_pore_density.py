@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 from palette import FORCEFIELDS  # [(key, label, colour), ...]
+from lipiddefs import LIPIDS
 
 # The chain-coordinate CV acts on a cylinder: radius 0.9 nm, height 2.7 nm,
 # centred on the pore centre (z=0).  In the (r, z) maps that is the box
@@ -30,7 +31,6 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
-LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 # Shared colour scale is set from a high percentile of the pooled bins rather
 # than the raw max: the innermost radial shells (r->0) have tiny volumes, so

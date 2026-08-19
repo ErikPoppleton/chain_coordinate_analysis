@@ -27,8 +27,16 @@ def read_xvg(xvg_file):
 rep = os.getcwd().split('/')[-1][-1]
 toploc = 'topol.top'
 
+# The SLURM submit templates come from this repository's setup_files/, located
+# relative to this script rather than an absolute path, so a clone anywhere works.
+SETUP_FILES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           'setup_files')
+SUBMIT_NPT = os.path.join(SETUP_FILES, 'submit_npt.sh')
+SUBMIT_UMBRELLA = os.path.join(SETUP_FILES, 'submit_umbrella.sh')
+
 importantfiles = ['umbrella_npt.mdp', 'umbrella.mdp', 'md.xtc', 'pull.tpr', 'pull.ndx', toploc]
 missing  = [f for f in importantfiles if not os.path.isfile(f)]
+missing += [f for f in (SUBMIT_NPT, SUBMIT_UMBRELLA) if not os.path.isfile(f)]
 assert not missing, f"Files not found: {', '.join(missing)}"
 
 # Generate the pullx file based on the production number of slices (27 instead of 35)
@@ -107,8 +115,8 @@ subprocess.run(f'''
                 sed -i "s/SETKTOO/${{k}}/g" umbrella${{i}}/umbrella.mdp;
                 cd umbrella${{i}};
                 $GMX grompp -f umbrella_npt.mdp -c conf${{i}}.gro -n ../pull.ndx -p ../{toploc} -o npt.tpr; 
-                cp ~/software/RNA_membrane/setup_files/memb_RNA/submit_npt.sh .;
-                cp ~/software/RNA_membrane/setup_files/memb_RNA/submit_umbrella.sh .;
+                cp "{SUBMIT_NPT}" .;
+                cp "{SUBMIT_UMBRELLA}" .;
                 sed -i "s/JOBNAME/umb${{i}}/" submit_npt.sh;
                 sed -i "s/JOBNAME/umb${{i}}/" submit_umbrella.sh;
                 cd ..;

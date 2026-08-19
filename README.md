@@ -1,512 +1,287 @@
-# Lipid-membrane equilibrium and pore-formation analysis
+# Lipid-membrane pore formation along a chain coordinate
 
-Reproducible analysis of membrane properties for three force fields
-(**CHARMM**, **AMBER**, **SLipids**) across three lipids (**DOPC**, **DMPC**,
-**DMPG**). Two halves: the **equilibrium** properties (§3) — area per lipid,
-bilayer thickness, hydrophobic-core thickness, order parameters, lateral
-diffusion, and two independent tilt moduli, each with autocorrelation-aware
-error bars, plus a manuscript summary table and an SI equilibration table — and
-the **pore-formation** simulations (§4) — PMFs along the chain coordinate ξ,
-pore geometry and occupancy, and pore metastability.
+Molecular-dynamics study of pore formation and pore stability in single-component
+lipid bilayers, comparing three force fields — **CHARMM**, **AMBER Lipid17**,
+and **SLipids** — across three lipids — **DOPC**, **DMPC**, and **DMPG**.
+Pores are opened along the *chain coordinate* ξ, a collective variable that
+counts the connected chain of polar atoms spanning the membrane, and the free
+energy of pore nucleation is obtained by umbrella sampling along it.
 
-This README documents what actually happened, there are ocassionally conventions/decisions that look insane in hindsight (duplicated trajectory files, thickness being computed multiple times, the local/cluster file paths, some things in scripts while others were run interactivley). If there's some portion of this you would actually use, open a GitHub issue and I'll try to clean it up for you.
+The project has two stages, and this repository holds both:
 
-> **Scope.** This README covers the **analysis** stage: you have the
-> trajectories and want to reproduce the tables and figures. Producing them
-> (system building, steered pulling, umbrella sampling on the custom GROMACS
-> *chain-coordinate* fork) is a separate **simulation-setup** stage, documented
-> elsewhere.
-
----
-
-## 1. The two-copy trajectory layout (read this first)
-
-The analysis described here was split across two machines because of difficulties getting certain programs installed on both machines. Throughout the README, they are labeled as *local*, which in the original paper was an arm64 device running MacOS and *cluster* which was an x86 device running Red Hat Enterprise Linux.
-
-| Requirement | Only available | Tools that need it |
+| Stage | Where it runs | Documented in |
 |---|---|---|
-| GROMACS 2026.3  (reads the `tpx v138` `.tpr`) | **cluster** | Trajectory wrangling, `gmx density` |
-| `g_lomepro` | **cluster** | `lipid_properties.py` |
-| OpenStructure + OST_pymodules (Python 2.7)| **local** | `tilt_modulus.py` |
-| Lipidator `resis` binary | **local** | `tilt_modulus.py` |
-| MDAnalysis + lipyphilic (Python 3) | both | most scripts |
+| **Simulation setup** — build the systems, equilibrate, steer a pore open, run the umbrella windows, WHAM | an HPC cluster with SLURM + the GROMACS *chain-coordinate* fork | **this README** |
+| **Analysis** — membrane properties, tilt moduli, PMFs, pore density/occupancy, tables and figures | mixed local/cluster | **[`analysis/README.md`](analysis/README.md)** |
 
-Because this repository reflects what was actually run rather than adding a complex path resolver after-the-fact, the scripts in this repo require **two
-copies of the same trajectories** depending on where the original analysis was run, each with its own naming convention:
+If you already have the trajectories and just want the numbers and figures, go
+straight to the [analysis README](analysis/README.md).
 
-| Copy | Path convention | Contents | Consumed by |
-|---|---|---|---|
-| **A — cluster, lipid-only** | `~/Simulations/{ff}_{lipid}/eq{i}/` | `memb.gro` + `inbox.xtc` (MEMB group only, waters removed) | `lipid_properties.py`, `g_lomepro`, `gmx density` |
-| **B — local, full system** | `traj/{ff}_{lipid}{i}.xtc` (+ shared `traj/{ff}_{lipid}.gro`) | full system incl. water/ions | `tilt_convert.py`, `core_thickness.py`, `run_lipidator*.py` |
-
-`{ff}` ∈ `{charmm, amber, slipids}`, `{lipid}` ∈ `{DOPC, DMPC, DMPG}`, `{i}` ∈
-`{1, 2, 3}` (replicates). **The filename convention is load-bearing** — the
-scripts parse `ff`/`lipid`/`rep` out of the paths; there is no manifest.
-
-Both copies are produced **on the cluster** from the same raw `md.xtc` /
-`md.tpr` by one `trjconv` preprocessing pass (both `-pbc mol -center`ed on the
-membrane, using the `MEMB` group from `../pull.ndx`); they differ only in the
-output selection — the lipid-only `inbox.xtc` (copy A) or the full-system
-`full.xtc` (copy B). The exact `trjconv` loop is in **§3, Step 0a**.
-
-`inbox.xtc` (+ a matching lipid-only `memb.gro`) stays cluster-side
-
-`full.xtc` needs to be downloaded to `traj/` as `traj/{ff}_{lipid}{i}.xtc`. Additionally, **one** replicate's
-full-system `md.gro` per system (→ `traj/{ff}_{lipid}.gro`) as the shared
-topology (the atom order — lipid, ions, water — is identical across replicates). Keeping water
-in copy B is what lets OpenStructure build the water/lipid density interface for the tilt normal, which the lipid-only copy A cannot provide. The
-full-system `.gro` files drive the `gmx density` index builder.
-
-All computed data lands in **`data/`** (gitignored; large `.xvg`/`.npz` live
-here), all figures in **`plots/`**.
+> **What this is.** These are the scripts as they were actually run, on one
+> specific cluster. Paths like `/u/epoppleton/software/gromacs-chain-coordinate`
+> and `module load gcc/8 cuda/11.6` are hard-coded throughout, and several steps
+> were run interactively rather than scripted. Treat the contents of
+> `setup_scripts/` and `setup_files/` as a documented record plus a starting
+> template, not as a turnkey pipeline. Adapting them is mostly a matter of
+> fixing the module loads, the `$GMX` path, and the SLURM headers.
 
 ---
 
-## 2. Dependencies
+## 1. Requirements
 
-Almost all of the analysis is Python 3. The versions this pipeline was last run
-with:
-
-| Package | Version | Needed by |
-|---|---|---|
-| Python | 3.13 | everything (except the tilt-χ compute) |
-| numpy | 2.5 | everything |
-| scipy | 1.18 | (MDAnalysis / pymbar dependency) |
-| MDAnalysis | 2.10 | index building, lipid properties, core thickness, tilt conversion, lipidator blocks |
-| lipyphilic | 0.12.1 | lipid properties, core thickness |
-| matplotlib | 3.11 | all plotting |
-| pymbar | 4.2 | `stats.py` (equilibration detection) |
-| statsmodels | 0.14 | `stats.py` (pymbar's FFT autocorrelation path) |
-
-External binaries: **GROMACS 2026.3** and **g_lomepro**
-on the cluster; the **Lipidator `resis`** binary locally.
-
-**How you install the Python packages is up to you** — a dedicated project
-environment, or all of it in one existing environment; conda/mamba/pip/uv,
-whatever you use. The pure
-plotting scripts need only numpy + matplotlib, and every script derives its paths
-from its own location (`Path(__file__)`), so they run from anywhere. *(Aside: on
-Apple silicon this pipeline required a dedicated x86 environment because one
-of the lipyphilic-stack packages — `lipyphilic` and its dependency `freud` — shipped
-only an x86 build.)*
-
-**The exception — OpenStructure + OST_pymodules (Python 2.7).**
-[OST_pymodules](https://github.com/njohner/ost_pymodules) (used to compute tilt modulus) was last updated in 2018 and is written in Python 2. Therefore, we also had to compile a Python 2.7-compatible version of [OpenStructure](https://openstructure.org) ([v1.7.0](https://git.scicore.unibas.ch/schwede/openstructure/-/tags)), so the tilt-modulus
-*compute* step (`tilt_modulus.py`, driven by `run_tilt.sh`) must run in its own
-**Python 2.7 + OpenStructure** environment, built **with** the IPLT image
-libraries (needed for the water/lipid density interface). This was terrible to get compiled and the reason for the duplicated trajectory paths. If you decide to follow me in this folly, good luck.
-
----
-
-## 3. Run order
-
-The analysis pipeline has a series of steps which must be run in order to complete successfully. Within each step, there are branches which are independent and can be run in any order/in parallel.
-The sequence is:  
-**Step 0 preprocessing → all raw-data branches → `stats.py` → tables/plotting.**
-The pore-formation half of the project is a separate pipeline — see §4.
-
-### Step 0 — preprocessing: trajectories, downloads, index files
-
-Nothing else runs until this is done. It has three parts, in order:
-**(0a)** make the two trajectory copies on the cluster, **(0b)** download the
-full-system copy plus the topology `.gro` files, **(0c)** build the GROMACS
-`.ndx` index files the cluster-side analyses need.
-
-#### 0a — `trjconv` the two copies  *(cluster, GROMACS 2026)*
-
-From the `Simulations/` root, turn each raw `md.xtc`/`md.tpr` into `inbox.xtc`
-(copy A, lipid-only) and `full.xtc` (copy B, full system). Both are `-pbc mol
--center`ed on the `MEMB` group of `../pull.ndx`; only the output selection
-differs:
-
-```bash
-for ff in charmm amber slipids; do
-    for l in DMPC DOPC DMPG; do
-        for i in 1 2 3; do
-            cd ${ff}_${l}/eq${i};
-            echo "MEMB MEMB" | gmx trjconv -f md.xtc -s md.tpr -n ../pull.ndx -pbc mol -center -o inbox.xtc;
-            echo "MEMB System" | gmx trjconv -f md.xtc -s md.tpr -n ../pull.ndx -pbc mol -center -o full.xtc;
-            echo "MEMB MEMB" | gmx trjconv -f md.gro -s md.tpr -n ../pull.ndx -pbc mol -center -o memb.gro;
-            cd ../../;
-        done;
-    done;
-done
-```
-
-`inbox.xtc` (copy A) stays on the cluster next to `memb.gro` while `full.xtc` (copy B) will be downloaded.
-
-#### 0b — download copy B and the topologies  *(cluster → local)*
-
-Pull down, for the local branches (B, C, D and the index builders below):
-
-- every replicate's `full.xtc` → `traj/{ff}_{lipid}{i}.xtc`;
-- **one** replicate's full-system `md.gro` per system → `traj/{ff}_{lipid}.gro`
-  (atom order is identical across replicates).
-
-The `.gro` files are not optional: MDAnalysis 2.10 cannot read the GROMACS 2026 `.tpr` format.
-
-#### 0c — build the index files  *(local; the `.ndx` are used cluster-side)*
-
-Three `.ndx` builders turn the downloaded `.gro` files into the atom selections
-the cluster-side analyses need. They must run **before** Branches A and B:
-
-```bash
-python analysis/make_density_index.py    # traj/{ff}_{lipid}.gro -> data/density_{ff}_{lipid}.ndx
-python analysis/make_tail_index.py       # traj/{ff}_{lipid}.gro -> data/tail_{ff}_{lipid}.ndx
-python analysis/make_order_index.py      # traj/{ff}_{lipid}.gro -> data/order_{ff}_{lipid}.ndx
-```
-
-Because the tools that consume them run cluster-side, copy the finished
-`.ndx` back, one per system, into `{ff}_{lipid}/` — i.e. one level above the
-`eq{i}` run directories, so a run directory reaches them as `../density.ndx`:
-
-```bash
-CLUSTER=user@cluster.example.org      # your ssh target
-REMOTE=~/Simulations                  # the Simulations/ root on the cluster
-for ff in charmm amber slipids; do
-    for l in DMPC DOPC DMPG; do
-        scp data/density_${ff}_${l}.ndx ${CLUSTER}:${REMOTE}/${ff}_${l}/density.ndx;
-        scp data/tail_${ff}_${l}.ndx    ${CLUSTER}:${REMOTE}/${ff}_${l}/tail.ndx;
-        scp data/order_${ff}_${l}.ndx   ${CLUSTER}:${REMOTE}/${ff}_${l}/lomepro.ndx;
-    done;
-done
-```
-
-### Branch A — lipyphilic properties + S_CD  *(cluster: MDAnalysis/lipyphilic + g_lomepro)*
-
-```bash
-# reads copy A (~/Simulations/{ff}_{lipid}/eq{i}/{memb.gro,inbox.xtc})
-python analysis/lipid_properties.py --nprocs 9
-```
-
-Computes APL, thickness, registration, S_CC, lateral diffusion via lipyphilic →
-`data/lipprops_*.npz`; Computes S_CD via `g_lomepro` →
-`data/{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`, reading the `{ff}_{lipid}/lomepro.ndx`
-uploaded in Step 0c (a system without one is skipped).
-
-### Branch B — hydrophobic-core thickness d_HC + equilibrium density profiles  *(cluster gmx density; local MDAnalysis/lipyphilic)*
-
-`d_HC` is computed by two independent metrics — a tail mass-density width from
-`gmx density` (cluster) and a lipyphilic first-tail-carbon `MembThickness`
-(local) — so run the cluster half first and have its profiles in `data/` before
-the local half. The same `gmx density` pass also produces the **equilibrium
-density profiles** (water/ions/lipid moieties along z), so both live here.
-
-**1. Cluster `gmx density`** against the `tail.ndx` and `density.ndx` copied
-back in Step 0c — one pass, two outputs, from the `Simulations/` root:
-
-```bash
-for ff in charmm amber slipids; do
-    for l in DMPC DOPC DMPG; do
-        for i in 1 2 3; do
-            cd ${ff}_${l}/eq${i};
-            echo "Membrane tails" | gmx density -f full.xtc -s md.tpr -n ../tail.ndx -center -o taildens.xvg;
-            echo "Membrane water sodium magnesium calcium phosphorus glycerol_C2 midpoint_C terminal_C" | gmx density -f full.xtc -s md.tpr -n ../density.ndx -center -ng 8 -o density.xvg;
-            cd ../../;
-        done;
-    done;
-done
-```
-
-The first group selected is the centering group (`Membrane`); the rest are the
-output groups (`-ng 8` for the eight density groups). `make_density_index.py`
-skips an ion group that is absent from a system (`gmx density` errors on an
-empty group), so if it warned about one, drop that name from the selection and
-lower `-ng` for that system.
-
-**2. Download the profiles** into `data/` under the names the plotting scripts
-parse: `taildens.xvg` → `data/{ff}_{lipid}_{rep}_taildens.xvg` (kept per
-replicate) and `density.xvg` → `data/{ff}_{lipid}_density.xvg` (one per system;
-`plot_density.py` maps the columns to group names via the `@ sN legend`
-header). The density profiles need nothing further — `plot_density.py` in the
-figures step turns them into `plots/density_profiles.png`.
-
-**3. Local lipyphilic metric** — reads copy B (`traj/`) and, on top of `d_HC`,
-stores the frame-aligned `d_HH` the thickness decomposition needs:
-
-```bash
-python analysis/core_thickness.py            # -> data/core_thickness.npz
-```
-
-### Branch C — tilt modulus, OpenStructure  *(local; stage 2 needs the Python 2.7 + OpenStructure env)* — see §2
-
-```bash
-# reads copy B; stage 1 converts (Python 3 / MDAnalysis), stage 2 computes chi (Python 2.7 / OpenStructure); resumable
-./analysis/run_tilt.sh                        # -> data/tilt_moduli.json + data/tilt_series_*.npz
-```
-
-`run_tilt.sh` loops ff×lipid×rep: `tilt_convert.py` (gro+xtc → pdb+dcd) →
-`tilt_modulus.py` (χ + block-averaged within-run SEM) → deletes the bulky dcd.
-Set the path to your OpenStructure interpreter at the top of `run_tilt.sh`.
-
-### Branch D — tilt modulus, Lipidator/ReSiS  *(local; needs the `resis` binary)* — **needs Branch C**
-
-```bash
-python analysis/make_lipidator_index.py   # -> data/lipidator_{ff}_{lipid}.ndx
-python analysis/run_lipidator.py          # -> data/lipidator_moduli.json  (kappa per rep)
-# within-run error: runs resis on trajectory block-slices; reuses g_var from tilt_moduli.json
-python analysis/run_lipidator_blocks.py   # -> data/lipidator_blocks.json
-```
-Note that Lipidator requires 'directors', custom formatted atom selections for determining lipid orientation. The directors used by `run_lipidator.py` were built with `make_director.py`:
-```shell
-python analysis/make_director.py          # -> <lipidator-toolkit>/directors/*.ldx
-```
-The new directors generated here have been [pull requested](https://github.com/allolio/lipidator-toolkit/pull/2) into the Lipidator repo, but at the time of writing, it has not been accepted.
-
-### Step E — equilibration statistics  *(local; needs pymbar + statsmodels)* — **needs A + B**
-
-```bash
-python analysis/stats.py                   # -> data/equilibrium_timeseries_stats.json
-```
-
-Per (ff, lipid, rep, observable): pymbar `detect_equilibration` → t₀, and the
-statistical inefficiency `g` / `Neff` on the production span `[t₀, T]`.
-**Run this before any table/plot below**, which read t₀ from its JSON to drop
-the burn-in (critical for the slow-equilibrating AMBER/SLipids DMPG systems).
-
-### Step F — tables & figures  *(local; needs numpy + matplotlib)*
-Requires all previous steps to have completed successfully and the `.npz`/`.dat` files to have been downloaded from the cluster-side `data/` directory.
-
-```bash
-python analysis/plot_tilt_modulus.py         # -> tilt summary + plots/tilt_modulus.png
-python analysis/plot_lipidator.py            # -> lipidator summary + plots/lipidator_tilt_modulus.png
-python analysis/make_equilibrium_table.py    # -> data/equilibrium_summary_table.tex
-python analysis/make_equilibration_table.py  # -> data/equilibration_summary_table.tex (SI)
-python analysis/plot_lipid_properties.py     # -> plots/lipprop_*.png (traj plots mark t0)
-python analysis/plot_core_thickness.py       # -> plots/core_thickness*.png
-python analysis/decompose_thickness.py       # -> plots/thickness_decomposition.png
-python analysis/plot_density.py              # -> plots/density_profiles.png
-```
-
-**Dependency summary:** `C → D` (lipidator blocks reuse tilt `g_var`); `A,B → E`;
-`E → make_equilibrium_table, make_equilibration_table, plot_lipid_properties`
-(t₀); `D → make_equilibrium_table, plot_lipidator` (κ CI); `C → make_equilibrium_table, plot_tilt_modulus` (χ CI).
-
----
-
-## 4. Pore-formation analysis
-
-Everything above is equilibrium bilayer analysis. This section covers the second
-half of the project: the **pore-formation** simulations, in which a pore is
-forced open along the chain coordinate, ξ, and umbrella-sampled along the opening pathway.
-
-Those simulations need [**gromacs-chain-coordinate**](https://gitlab.com/cbjh/gromacs-chain-coordinate),
-a fork of **GROMACS 2021** that adds the `pull-coord1-geometry = pore-slices`
-collective variable; stock GROMACS cannot run (or re-run) them. As above, this
-README assumes the simulations **have already been run** — it documents the
-analysis only.
-
-**Assumed cluster layout**, per system `{ff}_{lipid}/`:
-
-| Path | What it is |
+| Requirement | Why |
 |---|---|
-| `umbrella{i}/` | the umbrella windows along ξ, 50 ns each (`md.tpr`, `md.xtc`, `md_pullx.xvg`) |
-| `umbrella23/` | the **final window, ξ = 1** (the open pore) — run **200 ns** instead of 50, for pore geometry |
-| `umbrella23/close{1..10}/` | 10 × 5 ns metastability replicates, restarted from the final ξ = 1 configuration (`setup_scripts/setup_release.sh`) |
+| [**`gromacs-chain-coordinate`**](https://gitlab.com/cbjh/gromacs-chain-coordinate) — a fork of **GROMACS 2021** | provides `pull-coord1-geometry = pore-slices`, the chain-coordinate CV. **Stock GROMACS cannot run, continue, or even `-rerun` these systems.** Everything that touches the CV must use the fork's `gmx_mpi` |
+| A recent **stock GROMACS** (2022+; 2025.1/2026.3 were used here) | `make_ndx` default groups (fixed in 2022), the plain equilibrium runs, and trajectory wrangling |
+| **SLURM** | every production run is submitted through `sbatch` |
+| **Bash ≥ 4** | `setup_pull.sh` uses associative arrays |
+| Python 3 + numpy/matplotlib | `setup_scripts/select_umbrella_frames.py` |
 
-### 4a — PMFs along ξ  *(cluster, `gmx wham` from the fork)*
-
-The full-profile `gmx wham` submit script (`submit_wham.sh`) is placed in the simulation directory
-during setup. 
-
-The lists of pullx/tpr files required by `gmx wham` can be generated with:
-```shell
-rm pullx_files.dat tpr_files.dat
-touch pullx_files.dat tpr_files.dat
-for x in {0..23}; do 
-    echo "umbrella${x}/md_pullx.xvg" >> pullx_files.dat; 
-    echo "umbrella${x}/md.tpr" >> tpr_files.dat; 
-done
-```
-
-The five 10 ns sub-profiles (used for the convergence figures) are
-computed by splitting the same window list into consecutive 10 ns slices. Run from each `{ff}_{lipid}/` directory:
+Build GROMACS_chain_coordinate per its installation instructions. Once compiled, these two bash commands must be run before any command which uses the chain coordinate:
 
 ```bash
 export GMX=/path/to/gromacs-chain-coordinate/build/bin/gmx_mpi
 source /path/to/gromacs-chain-coordinate/build/scripts/GMXRC.bash
-for i in {1..5}; do
-START=$(((i-1)));
-END=$((i));
-srun -n 1 -c 10 -t 01:00:00 --mem 16000 -p interactive --export=ALL $GMX wham -it tpr_files.dat -ix pullx_files.dat -o part${i}_profile.xvg -hist part${i}_hist.xvg -unit kJ -ac -oiact part${i}_iac.xvg -bs-method traj -bsres part${i}_bs.xvg -b ${START}0000 -e ${END}0000 &
+```
+
+## 2. The chain coordinate ξ
+
+The CV is configured through **`SLICE_COORD_*` environment variables read at run time** — *not* through the `.mdp` (the `.mdp` only says
+`pull-coord1-geometry = pore-slices` and sets `pull-coord1-init`/`-k`). They are
+exported inside each submit script, so a rerun or a manual `mdrun` must export
+the same values or it will measure a different coordinate:
+
+| Variable | Steered pull | Umbrella / production | Meaning |
+|---|---|---|---|
+| `SLICE_COORD_N` | 35 | **27** | number of slices spanning the membrane |
+| `SLICE_COORD_D` | 0.1 | 0.1 | slice thickness (nm) |
+| `SLICE_COORD_CYL_R` | 0.9 | 0.9 | radius of the CV cylinder (nm) |
+| `SLICE_COORD_FREEZE_CYLINDER_XIREF` | 0.8 | 0.8 | ξ above which the cylinder centre is frozen |
+| `SLICE_COORD_FREEZE_CYLINDER_X/Y` | 3.0 / 3.0 | inherited from `submit_pull.sh` | frozen pore centre in the membrane plane (nm) |
+| `SLICE_COORD_NST_OUTPUT` | 50000 | 50000 | how often the cylinder geometry is written to the log |
+
+The slice count deliberately **differs between the steered pull (35) and
+production (27)** because 27 slices (which gives the target flat membrane ξ=0.2) during pulling would sometimes result in bent membranes or hanging droplets rather than complete pores. Umbrella starting frames are picked from a
+*rerun* of the pull trajectory at the production setting rather than from the
+pull's own `pullx` (step 4 below). The pulled group is `ONP` — all O, N and P
+atoms — against the lipid-`tail` reference group.
+
+The two groups, plus `MEMB`/`SOLV`, live in the per-system **`pull.ndx`**, which
+every later step (including the analysis-side `trjconv` pass) selects from.
+
+## 3. Directory convention
+
+Everything keys off a per-system directory named **`{ff}_{lipid}`** —
+`{ff}` ∈ `charmm, amber, slipids`, `{lipid}` ∈ `DOPC, DMPC, DMPG`. `setup_pull.sh`
+parses the force field and lipid **out of this directory name**, and so do the
+analysis-side scripts. A finished system looks like:
+
+```
+{ff}_{lipid}/
+├── topol.top, npt.gro, pull.ndx          # system + index groups (MEMB/SOLV/tail/ONP)
+├── pull.mdp, umbrella.mdp, umbrella_npt.mdp
+├── submit_pull.sh, submit_npt.sh, submit_umbrella.sh, submit_wham.sh
+├── eq{1,2,3}/                            # unbiased equilibrium replicates
+│   └── md.tpr, md.xtc, md.gro, md.cpt
+├── md.xtc, pull.tpr, md_pullx.xvg        # the steered pulling run
+├── umbrella{0..23}/                      # umbrella windows along ξ
+│   └── npt.{tpr,gro,cpt}, md.tpr, md.xtc, md_pullx.xvg
+│   └── umbrella23/close{1..10}/          # metastability replicates (ξ=1 window only)
+└── profile.xvg, hist.xvg, bs.xvg         # gmx wham output
+```
+
+## 4. The pipeline
+
+### Step 0 — build the systems  *(not scripted here)*
+
+Bilayers of 128 lipids + water + Na counterions + 150 mM NaCl + 5 mM MgCl + 2 mM CaCl were
+built per force field using the [CHARMM-GUI](https://www.charmm-gui.org/) Membrane Builder which generates the 7-step minimization and equilibration pipeline ending with the `step6.6_equilibration.{gro,cpt,tpr}` files the
+scripts consume. 
+
+CHARMM-GUI only has parameters for the CHARMM36 and Amber Lipid21 forcefields. The Slipids topology files for each lipid were built by hand using the forcefield files from the [Slipids2020 repository](https://bitbucket.org/alexander_lyubartsev/slipids-2020/src/master/Slipids_2020.ff/). This required re-ordering the DOPC `.gro` file generated by CHARMM-GUI with `setup_scripts/reorder_dopc.py`.
+
+Reference configurations for every force field / lipid pair are in
+`snapshots/*_example.gro` — useful for checking residue and atom names.
+
+### Step 1 — index groups, MDPs, and the pull `.tpr`
+
+Run **from inside** each `{ff}_{lipid}/` directory:
+
+```bash
+REPO=/path/to/chain_coordinate_analysis     # wherever you cloned this
+$REPO/setup_scripts/setup_pull.sh
+```
+
+It:
+
+1. parses `FF`/`LIPID` from the directory name and refuses unknown values;
+2. centres the membrane (`trjconv -pbc mol -center`) → `npt.gro`, using **stock
+   GROMACS ≥ 2022** because older `make_ndx` had a default-group bug;
+3. builds `pull.ndx` with the four groups the CV and all later analysis need —
+   `MEMB` (lipids), `SOLV` (everything else), `tail` (the pull reference: acyl
+   carbons `C2*`/`C3*` for CHARMM/SLipids, the whole `OL`/`MY` tail residue for
+   AMBER), and `ONP` (all O + N + P atoms, the pulled polar group);
+4. copies in the force-field-specific `pull_{ff}.mdp`, `umbrella_{ff}.mdp`,
+   `umbrella_npt_{ff}.mdp` and the submit scripts;
+5. `grompp`s `pull.tpr` with the fork.
+
+The AMBER branch is the only genuinely force-field-dependent part: Lipid17
+splits a lipid into head (`PC`/`PGR`) + two tail (`OL`/`MY`) residues, so the
+membrane and tail selections are built from bash associative arrays instead of a
+single lipid resname.
+
+### Step 2 — unbiased equilibrium replicates
+
+```bash
+$REPO/setup_scripts/setup_equilibrium.sh   # run from the directory holding all nine {ff}_{lipid}/
+```
+
+Creates `eq{1,2,3}/` per system, each `grompp`ed from the same equilibration
+checkpoint, and submits **three chained jobs** (`sbatch --dependency=afterany`)
+per replicate so a run survives the 24 h wall clock. `eq_{ff}.mdp` writes a
+compressed frame every 100 000 steps = **200 ps**, which is the 0.2 ns/frame the
+analysis assumes.
+
+These runs are pure equilibrium MD — no pulling — and they are what the
+[equilibrium half of the analysis](analysis/README.md) consumes.
+
+### Step 3 — steer a pore open
+
+```bash
+sbatch submit_pull.sh                   # from {ff}_{lipid}/
+```
+
+`pull_{ff}.mdp` pulls at `pull-coord1-rate = 1.6e-5` (ξ per ps) with
+`pull-coord1-k = 5000` from `pull-coord1-init = 0.20` over 60 ns, writing
+`md.xtc` + `md_pullx.xvg`. The commented second `mdrun` line in the submit script
+is the continuation form (`-cpi md.cpt`), used if the job hits the wall clock (which it likely will because GROMACS 2021 is significantly slower than GROMACS 2026).
+
+### Step 4 — pick the umbrella windows
+
+```bash
+python $REPO/setup_scripts/select_umbrella_frames.py   # from each {ff}_{lipid}/ directory
+```
+
+1. **Reruns** the pull trajectory with the *production* CV settings
+   (`SLICE_COORD_N=27`) → `rerun_pullx.xvg`, so the ξ values match what the
+   windows will actually restrain.
+2. Picks **24 target ξ values** — `linspace(0, 0.65, 11)` then
+   `linspace(0.7, 1.0, 13)` (Based on [Hub & Awasthi 2017](https://pubs.acs.org/jctcce/article/13/5/2352/752738/Probing-a-Continuous-Polar-Defect-A-Reaction)), deliberately denser above ξ = 0.7 around the expected energy barrier, and captures the frame closest to each target ξ value via `trjconv -dump`.
+3. Writes `umbrella_frames.png`, a sanity plot of ξ(t) with the chosen frames
+   marked.
+4. Creates `umbrella{0..23}/`, filling the `SETME` (ξ reference) and `SETKTOO`
+   (force constant) placeholders in the MDPs: **k = 5000** below ξ = 0.7 and
+   **k = 15000** at/above it, matching the denser spacing. Then `grompp`s each
+   window's NPT `.tpr`.
+
+Then, per window, a short restrained NPT followed by production:
+
+```bash
+for i in {0..23}; do (cd umbrella${i} && sbatch submit_npt.sh); done
+# when the NPT jobs finish (submit_umbrella.sh grompps md.tpr from npt.cpt/npt.gro):
+for i in {0..23}; do (cd umbrella${i} && sbatch submit_umbrella.sh); done
+```
+
+`umbrella_npt_{ff}.mdp` runs 10 ns at k = 1000 to relax the window;
+`umbrella_{ff}.mdp` runs 50 ns per submission. Both take the frozen pore centre X/Y and `SLICE_COORD_FREEZE_CYLINDER_XIREF`
+from `submit_pull.sh`, so the whole system keeps one common pore axis.
+
+### Step 5 — the ξ = 1 window and the metastability replicates
+
+`umbrella23` (ξ = 1, the fully open pore) was extended to **200 ns** rather than
+50 for the pore geometry/occupancy analysis.
+
+From inside `umbrella23/`:
+
+```bash
+$REPO/setup_scripts/setup_release.sh
+```
+
+This spawns `close{1..10}/`: ten 5 ns replicates restarted from the ξ = 1
+configuration with **the restraint switched off**. The pore is then free to close or persist,
+and the resulting `close_pullx.xvg` traces analyzed for metastability.
+
+### Step 6 — WHAM
+
+From each `{ff}_{lipid}/`, list the windows and submit:
+
+```bash
+rm -f pullx_files.dat tpr_files.dat
+touch pullx_files.dat tpr_files.dat
+for x in {0..23}; do
+    echo "umbrella${x}/md_pullx.xvg" >> pullx_files.dat
+    echo "umbrella${x}/md.tpr"       >> tpr_files.dat
 done
+sbatch submit_wham.sh
 ```
 
-Download the profiles into `data/` labeled by forcefield (this naming convention is load-bearing):
+`submit_wham.sh` runs the fork's `gmx wham` with bootstrap error estimation
+(`-bs-method traj`) and integrated autocorrelation times (`-ac`), producing
+`profile.xvg`, `hist.xvg`, `iac.xvg`, `bs.xvg`. The consecutive 10 ns
+sub-profiles used for the convergence figures come from the same file lists with
+`-b`/`-e` — see §4a of the [analysis README](analysis/README.md).
 
-| Downloaded as | From |
+## 5. MDP reference
+
+| File | Stage | Key settings |
+|---|---|---|
+| `eq_{ff}.mdp` | unbiased equilibrium | 500 ns, 2 fs, no pulling, frame every 200 ps |
+| `pull_{ff}.mdp` | steered pulling | 60 ns, `pull-coord1-rate = 1.6e-5`, `k = 5000`, `init = 0.20` |
+| `umbrella_npt_{ff}.mdp` | per-window relaxation | 10 ns, `rate = 0`, `k = 1000` |
+| `umbrella_{ff}.mdp` | window production | 50 ns/job, `rate = 0`, `k = {5000,15000} (ξ<0.7,ξ≥0.7)` |
+
+All runs: leap-frog, 2 fs, h-bond constraints, v-rescale thermostat at
+**310 K**, c-rescale semiisotropic barostat at 1 bar.
+
+The three force fields differ only in their non-bonded treatment, as each
+force field prescribes:
+
+| | `rcoulomb` / `rvdw` | `vdw-modifier` | `DispCorr` | `rlist` |
+|---|---|---|---|---|
+| CHARMM | 1.2 | force-switch (from 1.0) | no | 1.4 |
+| AMBER | 1.0 | potential-shift | EnerPres | 1.3 |
+| SLipids | 1.5 | force-switch (from 1.4) | EnerPres | 1.7 |
+
+## 6. Visualising a run
+
+`analysis/cylinder_pml.sh`, run from a run directory, reads the CV cylinder
+geometry out of the newest `slurm.*.err` and writes a `cyl_style.pml` that draws
+it in PyMOL, with the lipid tails hidden so the pore is visible. It detects the
+force field and lipid by walking **up** the path to the `{ff}_{lipid}` directory
+(stopping at a directory named `Simulations`), since run directories are nested
+several levels below it; `cylinder_pml.sh <ff> <lipid>` overrides detection.
+
+## 7. Adapting to other force fields / lipids
+
+On the setup side, three places encode the force field:
+
+1. **`setup_pull.sh`** — the `amber_heads`/`amber_tails` associative arrays and
+   the `MEMB`/`SOLV`/`tail` selections. A new force field that keeps one residue
+   per lipid follows the CHARMM/SLipids branch; one that splits head and tail
+   residues follows the AMBER branch.
+2. **`setup_files/*_{ff}.mdp`** — copy an existing set and change the non-bonded
+   block to whatever the force field prescribes.
+3. **Directory names** — `{ff}_{lipid}` is load-bearing at every later step.
+
+The analysis side has its own single source of truth for the same facts
+(`analysis/lipiddefs.py`) — see
+§6 of the [analysis README](analysis/README.md).
+
+## 8. Repository layout
+
+| Path | Contents |
 |---|---|
-| `data/{ff}_{lipid}_profile.xvg` | the full-length `gmx wham` profile |
-| `data/{ff}_{lipid}_part{1..5}_profile.xvg` | `part${i}_profile.xvg` above (consecutive 20 ns windows) |
-| `data/{ff}_{lipid}_20-100_profile.xvg` | optional: a single `-b 20000` run (80 ns window test for DMPC) |
-
-```bash
-python analysis/plot_pmf.py             # -> plots/pmf_profiles.png (1x3, partials drawn faintly behind)
-python analysis/plot_range_vs_time.py   # -> plots/range_vs_{time,starttime}_{lipid}.png (PMF spread vs sampling)
-```
-
-### 4b — Pore geometry and occupancy  *(cluster compute, local plots)*
-
-`pore_density.py` builds cylindrically-averaged **(radius, z)** density maps
-around the pore centre from the 200 ns ξ = 1 window, plus the per-frame count of
-atoms inside the CV cylinder (r = 0.9 nm, h = 2.7 nm — set at `grompp` time by the `SLICE_COORD_CYL_R`, `SLICE_COORD_N` and `SLICE_COORD_D` environment variables).
-
-It needs three files per run directory: `md.xtc` + `md.gro` (the **full**
-water+ion system) and `rerunerr.log`, the chain-coordinate rerun log, which
-prints `Cylinder center at (X/Y/Z): cx cy cz` for every frame. Generate `rerunerr.log with:
-
-```bash
-# in {ff}_{lipid}/umbrella23/, with $GMX = the gromacs-chain-coordinate gmx_mpi
-eval "$(cat submit_umbrella.sh | grep 'export SLICE')"
-export SLICE_COORD_NST_OUTPUT=1
-$GMX mdrun -v -rerun md.xtc -s md.tpr -deffnm rerun -ntomp 1 &> rerunerr.log
-```
-
-
-With the logs in place, compute the maps:
-
-```bash
-# cluster, MDAnalysis env; discovers ~/Simulations/{ff}_{lipid}/umbrella23/ for all nine systems
-python analysis/pore_density.py
-```
-See `pore_density.py -h` for options on running on specific lipids or other simulation paths.
-
-This will write `data/poredens_{ff}_{lipid}.npz` (density maps) and
-`data/poredens_counts_{ff}_{lipid}.npz` (per-frame occupancy). Download both,
-then plot locally:
-
-```bash
-python analysis/plot_pore_density.py    # -> plots/poredens_{water,phosphorus,glycerol_c2,midpoint_c}.png
-                                        #    + plots/poredens_zoom_{water,phosphorus}.png
-python analysis/plot_pore_counts.py     # -> plots/poredens_counts.png, poredens_counts_middle.png
-```
-
-Both read only the `.npz` files (numpy + matplotlib); panels with no data are
-left blank, so a partial download still plots.
-
-### 4c — Pore metastability  *(the `close` replicates)*
-
-`setup_release.sh`, run from `umbrella23/`, spawns `close{1..10}/` — 10 × 5 ns
-runs restarted from the final ξ = 1 configuration (`md.cpt`/`md.gro`) with the
-umbrella force constant zeroed, so the pore is free to close while ξ keeps being
-recorded. Download the ξ
-traces as `data/{ff}_{lipid}_close{1..10}_pullx.xvg`:
-
-```bash
-python analysis/plot_close_pullx.py     # -> plots/close_pullx_{lipid}.png (one panel per ff, 10 replicates)
-```
-
-### 4d — Equilibrium properties vs the pore barrier
-
-Each system's **pore-nucleation
-barrier** (the min→max range of its full PMF) scattered against the equilibrium
-properties from §3.
-
-```bash
-python analysis/plot_property_vs_barrier.py       # -> plots/property_vs_barrier.png (6 properties)
-python analysis/plot_thick_kappa_vs_barrier.py    # -> plots/thick_kappa_vs_barrier.png (d_HC + kappa only)
-```
-
-Both reuse `make_equilibrium_table.collect()` for the property means and error
-bars, so they need everything §3 Step F needs **plus** all nine
-`data/{ff}_{lipid}_profile.xvg` from 4a.
+| `setup_scripts/` | the setup drivers described above |
+| `setup_files/` | MDP templates and SLURM submit scripts, per force field |
+| `analysis/` | all analysis and plotting code — see [`analysis/README.md`](analysis/README.md) |
+| `snapshots/` | one example configuration per force field / lipid, for checking names |
+| `traj/`, `data/`, `plots/` | analysis inputs/outputs (gitignored) |
 
 ---
 
-## 5. Error-bar model (what the bars mean)
+## Next: the analysis
 
-Point-estimate figures/tables use a **hierarchical 95% confidence interval**
-(`analysis/autocorr.py`, `hierarchical_ci*`): each replicate contributes a
-within-run error, combined with the between-replicate spread as
-`SE = sqrt(max(between_sd², within_sem²) / n)` — tight/pooled where replicates
-agree, honestly wide where they don't (e.g. AMBER DMPG). The within-run error is
-the autocorrelation-limited SEM (`SD/√Neff`, Chodera 2016) for per-frame
-observables (APL, d_HH, d_HC), and a block-averaged SEM for the tilt moduli
-(χ, κ). `D` and `⟨−S_CD⟩` — a single fitted scalar/profile per run — keep the SD
-across replicates. The property-distribution **histograms** deliberately show the
-full pooled distribution, not an error bar.
-
----
-
-## 6. Adapting to different force fields / lipids
-
-Almost everything you need to change lives in **`analysis/lipiddefs.py`**, the
-single source of truth for which systems exist and how each force field names
-things. It is pure stdlib and Python 2/3 compatible (the OpenStructure stage
-runs under Python 2.7), and every other script imports from it:
-
-| In `lipiddefs.py` | What it defines |
-|---|---|
-| `FORCEFIELDS`, `FF_LABELS`, `LIPIDS`, `REPS` | the systems — keys (= filename prefixes), display labels, replicate numbers |
-| `SCHEME` | residue layout per force field: `"single"` (CHARMM/SLipids, one residue per lipid) vs `"amber"` (Lipid17 tail–head–tail) |
-| `TAIL_NC` (alias `TERM`) | carbons per acyl chain, carbonyl counted as C1 |
-| `DOUBLE_BOND`, `CHAIN_MID` | cis double-bond position per lipid (absent ⇒ saturated) and the mid-chain carbon used for the saturated density group |
-| `AMBER_HEAD`, `AMBER_TAIL` | AMBER head / tail residue names per lipid |
-| `PHOSPHATE_NAMES`, `PHOSPHATE_SEL` | the one-phosphorus-per-lipid selection (`P` / `P31`) |
-| `WATER`, `WATER_NAME`, `WATER_OXYGEN`, `SODIUM`, `MAGNESIUM`, `CALCIUM` | solvent/ion resnames (the water resname is also what pins the force field in `detect()`) |
-| `lipid_resnames`, `chain_atom_names`, `midpoint_carbon`, `n_unsat` | the small helpers that turn the above into selections |
-
-So:
-
-1. **A new lipid** — add it to `LIPIDS`, give it a `TAIL_NC` entry, an
-   `AMBER_HEAD`/`AMBER_TAIL` entry, and (if unsaturated) a `DOUBLE_BOND` entry.
-   Optionally add an `EXPERIMENTAL` row in `make_equilibrium_table.py` for the
-   table's `Exp` line; leave it out and the row stays blank.
-2. **A new force field** — add its key to `FORCEFIELDS` + `FF_LABELS`, its
-   residue layout to `SCHEME`, its water/ion resnames to `WATER`/`WATER_NAME`
-   (+ `SODIUM`/…), and a colour in `palette.COLORS` (`palette.FORCEFIELDS` is
-   built from `lipiddefs` + those colours, so the plots pick it up
-   automatically). If it names acyl carbons unlike either existing scheme,
-   extend `chain_atom_names`/`lipid_resnames` and the `detect()` functions in
-   `make_density_index.py` / `make_order_index.py`.
-3. **Filenames** — name the trajectories exactly `{ff}_{lipid}{i}` (copy B) and
-   `{ff}_{lipid}/eq{i}` (copy A); the load-bearing convention is how every script
-   finds and labels the data.
-
-Anything genuinely toolkit-specific stays with its tool: the OST director
-selections in `tilt_modulus.selections()`, the Lipidator director recipe in
-`make_director.py`, and the g_lomepro chain construction in
-`make_order_index.py` — all of which read their chain lengths and residue names
-from `lipiddefs`.
-
----
-
-## 7. Output artifacts
-
-**Tables** (`data/`, drop-in LaTeX; need `booktabs,multirow,amsmath` + a
-bibliography with the cited toolkit/`chodera2016simple` keys):
-
-| File | Contents |
-|---|---|
-| `equilibrium_summary_table.tex` | main manuscript table: APL, d_HH, d_HC, D, ⟨−S_CD⟩, χ, κ — mean ± hierarchical 95% CI |
-| `equilibration_summary_table.tex` | SI: per-observable t₀ / production window / N / N_eff (mean ± SD over reps) |
-
-**Key figures** (`plots/`):
-
-| File | Contents |
-|---|---|
-| `lipprop_{area_per_lipid,memb_thickness,registration}.png` | overlaid property histograms |
-| `lipprop_traj_*.png` | per-frame trajectories (rep 1) with the pymbar t₀ marked |
-| `lipprop_core_thickness.png`, `core_thickness*.png` | d_HC histogram, bar chart, density profiles |
-| `lipprop_scd.png` | S_CD per-carbon order-parameter profile |
-| `tilt_modulus.png`, `lipidator_tilt_modulus.png` | the two tilt moduli (χ, κ) with hierarchical-CI bars |
-| `density_profiles.png` | z-density profiles of water/ions/lipid markers |
-
-Pore-formation figures (§4):
-
-| File | Contents |
-|---|---|
-| `pmf_profiles.png` | PMFs along ξ, 1×3 lipid panels, 20 ns partials behind |
-| `range_vs_time_{lipid}.png`, `range_vs_starttime_{lipid}.png` | PMF energy range vs sampling length / window start |
-| `poredens_{water,phosphorus,glycerol_c2,midpoint_c}.png` | cylindrically-averaged (r, z) density maps around the pore |
-| `poredens_zoom_{water,phosphorus}.png` | the same, restricted to the CV cylinder |
-| `poredens_counts{,_middle}.png` | per-frame occupancy of the CV cylinder (and its middle third) |
-| `close_pullx_{lipid}.png` | ξ(t) of the 10 pore-metastability replicates |
-| `property_vs_barrier.png`, `thick_kappa_vs_barrier.png` | equilibrium properties vs pore-nucleation barrier (§4d — bridges §3 and §4) |
-
-**Intermediate data** (`data/`, reusable so the slow steps run once):
-`lipprops_*.npz`, `core_thickness.npz`, `tilt_moduli.json` + `tilt_series_*.npz`,
-`lipidator_moduli.json` + `lipidator_blocks.json`, the `*_summary.json` files,
-and `equilibrium_timeseries_stats.json` (the t₀/g/Neff source of truth); from
-§4, `poredens_{ff}_{lipid}.npz` + `poredens_counts_{ff}_{lipid}.npz` and the
-`gmx wham` `*_profile.xvg` files.
+Everything downstream of the trajectories — equilibrium membrane properties,
+order parameters, two independent tilt moduli, the PMFs along ξ, pore geometry
+and occupancy, pore metastability, and the manuscript tables and figures — is
+documented in **[`analysis/README.md`](analysis/README.md)**.

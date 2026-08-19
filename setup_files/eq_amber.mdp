@@ -1,6 +1,6 @@
 ; Run parameters
 integrator           = md        ; leap-frog integrator
-nsteps               = 125000000  ; 0.002 * 125000000 = 250000 ps (250 ns)
+nsteps               = 250000000  ; 0.002 * 250000000 = 500000 ps (500 ns)
 dt                   = 0.002     ; 2 fs
 continuation         = yes       ; continue from npt
 

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Plot PMF profiles for each lipid.  Per lipid, the three force fields
-(CHARMM, AMBER, SLipids) are overlaid, each shifted so that its minimum energy
-is zero."""
+"""Plot PMF profiles as three horizontal panels -- DOPC, DMPC, DMPG across the
+columns of one figure.  Within each panel the three force fields (CHARMM, AMBER,
+SLipids) are overlaid, each shifted so its minimum energy is zero; the five 20 ns
+partial profiles (if present) are drawn faintly behind the full curve.  Force
+fields / lipids with no profile data are simply absent from their panel."""
 
 from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from palette import FORCEFIELDS
 
@@ -15,13 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
-# Lipids to plot; profiles are named "{ff}_{lipid}_profile.xvg".  A lipid with
-# no profile files (only pullx trajectories) is skipped.
+# Lipids across the columns; profiles are named "{ff}_{lipid}_profile.xvg".
 LIPIDS = ["DOPC", "DMPC", "DMPG"]
 
 # Each full profile is accompanied by five partial profiles computed from
-# consecutive 20 ns windows (0-20, 20-40, 40-60, 60-80, 80-100 ns).  They
-# share the full profile's basename, e.g. "charmm_DMPC_profile.xvg" ->
+# consecutive 20 ns windows (0-20, 20-40, 40-60, 60-80, 80-100 ns), sharing the
+# full profile's basename, e.g. "charmm_DMPC_profile.xvg" ->
 # "charmm_DMPC_part1_profile.xvg" ... "charmm_DMPC_part5_profile.xvg".
 N_PARTS = 5
 
@@ -41,15 +43,12 @@ def load_xvg(path):
     return np.array(x), np.array(y)
 
 
-def plot_lipid(lipid):
-    """Overlay the CHARMM/AMBER/SLipids PMF profiles for one lipid.  Returns
-    True if a figure was produced, False if the lipid has no profile data."""
-    fig = plt.figure(figsize=(6, 5))
+def plot_lipid(ax, lipid):
+    """Overlay the CHARMM/AMBER/SLipids PMF profiles for one lipid onto ``ax``.
+    Returns True if any curve was drawn, False if the lipid has no profile data."""
     plotted = False
-
     for key, label, color in FORCEFIELDS:
-        fname = f"{key}_{lipid}_profile.xvg"
-        path = DATA / fname
+        path = DATA / f"{key}_{lipid}_profile.xvg"
         if not path.exists():
             continue
         plotted = True
@@ -60,37 +59,37 @@ def plot_lipid(lipid):
             if not part_path.exists():
                 continue
             px, py = load_xvg(part_path)
-            plt.plot(px, py - py.min(), color=color, lw=0.5, alpha=0.3)
+            ax.plot(px, py - py.min(), color=color, lw=0.5, alpha=0.3)
 
         x, y = load_xvg(path)
-        # Shift so the curve's minimum sits at y == 0
-        plt.plot(x, y - y.min(), color=color, label=label)
+        ax.plot(x, y - y.min(), color=color, label=label)   # min-zeroed
 
-    if not plotted:
-        plt.close(fig)
-        print(f"skipped {lipid}: no profile data")
-        return False
-
-    ax = plt.gca()
     ax.axhline(0.0, color="gray", lw=0.5, ls="--")
     ax.set_xlim(0.0, 1.0)
-    # Mirror the y-axis ticks onto the right spine.
     ax.tick_params(axis="y", right=True)
     ax.set_xlabel(r"$\xi$")
-    ax.set_ylabel(r"PMF (kJ mol$^{-1}$)")
     ax.set_title(lipid)
-    ax.legend()
-    plt.tight_layout()
-    outpath = PLOTS / f"pmf_profiles_{lipid}.png"
-    plt.savefig(outpath, dpi=300)
-    plt.close(fig)
-    print(f"wrote {outpath}")
-    return True
+    if not plotted:
+        print(f"note: {lipid} has no profile data (blank panel)")
+    return plotted
 
 
 def main():
-    for lipid in LIPIDS:
-        plot_lipid(lipid)
+    PLOTS.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(1, len(LIPIDS), figsize=(15, 4.5), sharey=True)
+    for ax, lipid in zip(axes, LIPIDS):
+        plot_lipid(ax, lipid)
+    axes[0].set_ylabel(r"PMF (kJ mol$^{-1}$)")
+
+    # One shared legend (the force-field colour key) above the panels.
+    handles = [Line2D([0], [0], color=c, label=l) for _, l, c in FORCEFIELDS]
+    fig.legend(handles=handles, loc="upper center", ncol=len(FORCEFIELDS),
+               frameon=False, bbox_to_anchor=(0.5, 1.02))
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    outpath = PLOTS / "pmf_profiles.png"
+    fig.savefig(outpath, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote {outpath}")
 
 
 if __name__ == "__main__":

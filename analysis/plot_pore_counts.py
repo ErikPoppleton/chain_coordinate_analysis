@@ -11,11 +11,14 @@ Two figure sets are produced, one per z-slab counted by ``pore_density.py``:
     the central 9 A -- the pore's narrowest waist), from the ``{name}_mid`` keys.
 
 Each is a 3x3 grid with **atom type down the rows** (water / phosphate /
-glycerol C2) and **lipid across the columns** (DOPC/DMPC/DMPG).  Within each
-panel the three force fields overlay as lines coloured by the ``palette``
-force-field scheme (CHARMM blue / AMBER green / SLipids gold) -- so the top-left
-panel is water occupancy for DOPC with one line per force field.  Each row (atom
-type) shares a y-scale; panels with no data are left blank.
+glycerol C2) and **lipid across the columns** (DOPC/DMPC/DMPG).  Every cell is a
+pair of axes sharing the count (y) axis: a wide occupancy-vs-time trajectory
+(3/4 width) and, to its right, a narrow **vertical histogram** (1/4 width) that
+aggregates that trajectory into the marginal distribution of the count -- one
+outline per force field, with **1-atom (integer) bins**.  Within each panel the
+three force fields overlay in the ``palette`` scheme (CHARMM blue / AMBER green
+/ SLipids gold); each row (atom type) shares a y-scale.  Panels with no data are
+left blank.
 
 Requires only numpy + matplotlib.
 """
@@ -24,6 +27,8 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from matplotlib.ticker import MaxNLocator
 
 from palette import FORCEFIELDS  # [(key, label, colour), ...]
 
@@ -48,41 +53,66 @@ def load(ff, lipid):
 
 def plot_counts(panels, suffix, title, out_stem):
     """Draw the atom-type x lipid grid for one z-slab (``suffix`` = '' full
-    cylinder, '_mid' middle third), overlaying the force fields per panel."""
+    cylinder, '_mid' middle third).  Each cell is a trajectory + a vertical,
+    1-atom-binned histogram of the same data, overlaying the force fields."""
     keys = {base: base + suffix for base, _ in ROWS}
-    # Per-row (atom-type) shared y-max, and a shared x (time) range.
-    row_max = {}
-    for base, _ in ROWS:
-        k = keys[base]
-        vals = [npz[k].max() for npz in panels.values() if k in npz.files]
-        row_max[base] = max(vals) * 1.1 if vals else 1.0
     if not any(keys[b] in npz.files for b, _ in ROWS for npz in panels.values()):
         print(f"skip {out_stem}: no '{suffix or 'full'}' count arrays in the npz files")
         return
+
+    # Per-row (atom-type) integer count max -> shared y-scale + histogram bins.
+    row_hi = {}
+    for base, _ in ROWS:
+        k = keys[base]
+        vals = [int(npz[k].max()) for npz in panels.values() if k in npz.files]
+        row_hi[base] = max(vals) if vals else 1
     tmax = max((npz["time_ps"].max() for npz in panels.values()), default=1000.0) / 1000.0
 
-    fig, axes = plt.subplots(len(ROWS), len(LIPIDS), figsize=(11, 8), sharex=True)
-    handles, labels = [], []
+    fig = plt.figure(figsize=(11, 8))
+    outer = GridSpec(len(ROWS), len(LIPIDS), figure=fig, left=0.07, right=0.985,
+                     top=0.87, bottom=0.08, wspace=0.34, hspace=0.18)
+    xticks = np.arange(50, tmax + 1, 50)   # keep the 200 ns endpoint, drop 0;
+    handles, labels = [], []               # the histogram's 0.00 tick is pruned
+
     for r, (base, ylabel) in enumerate(ROWS):
         k = keys[base]
+        hi = row_hi[base]
+        edges = np.arange(-0.5, hi + 1.5, 1.0)   # 1-atom bins centred on integers
+        # In the middle-third figure the phosphate/glycerol counts often sit at 0,
+        # so drop ymin below 0 there to keep the y=0 line off the axis spine.
+        ymin = -0.5 if (suffix == "_mid" and base != "water") else 0
+        ylim = (ymin, hi * 1.08)
         for c, lipid in enumerate(LIPIDS):
-            ax = axes[r][c]
-            ax.set_ylim(0, row_max[base])
-            ax.set_xlim(0, tmax)
+            inner = GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[r, c],
+                                            width_ratios=[3, 1], wspace=0.05)
+            axt = fig.add_subplot(inner[0])
+            axh = fig.add_subplot(inner[1], sharey=axt)
+            axt.set_ylim(*ylim)
+            axt.set_xlim(0, tmax)
+            axt.set_xticks(xticks)
+            # Move the histogram's shared-y ticks to its right edge so they don't
+            # clutter the narrow gap between the trajectory and the histogram.
+            axh.yaxis.set_ticks_position("right")
+            axh.tick_params(labelleft=False, labelright=False)
+            axh.xaxis.set_major_locator(MaxNLocator(nbins=2, prune="lower"))
             if r == 0:
-                ax.set_title(lipid)
+                axt.set_title(lipid)
             if c == 0:
-                ax.set_ylabel(ylabel)
-            else:
-                ax.tick_params(labelleft=False)
+                axt.set_ylabel(ylabel)
             if r == len(ROWS) - 1:
-                ax.set_xlabel("time (ns)")
+                axt.set_xlabel("time (ns)")
+                axh.set_xlabel("density")
+            else:
+                axt.tick_params(labelbottom=False)
+                axh.tick_params(labelbottom=False)
             for ff, ff_label, colour in FORCEFIELDS:
                 npz = panels.get((ff, lipid))
                 if npz is None or k not in npz.files:
                     continue
-                (line,) = ax.plot(npz["time_ps"] / 1000.0, npz[k],
-                                  color=colour, lw=0.8, label=ff_label)
+                (line,) = axt.plot(npz["time_ps"] / 1000.0, npz[k],
+                                   color=colour, lw=0.8, label=ff_label)
+                axh.hist(npz[k], bins=edges, orientation="horizontal",
+                         histtype="step", color=colour, density=True, lw=0.9)
                 if ff_label not in labels:
                     handles.append(line)
                     labels.append(ff_label)
@@ -90,7 +120,6 @@ def plot_counts(panels, suffix, title, out_stem):
     fig.suptitle(title, y=0.99)
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.955),
                frameon=False, ncol=3)
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
     out = PLOTS / f"{out_stem}.png"
     fig.savefig(out, dpi=300)
     plt.close(fig)

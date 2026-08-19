@@ -119,7 +119,7 @@ def plot_selection(key, stem, title, region=None):
                                 extent=extent, cmap="viridis", vmin=0, vmax=1)
             if region is None:  # outline the CV cylinder; in zoom it IS the frame
                 ax.add_patch(Rectangle((0.0, -CYL_H / 2), CYL_R, CYL_H, fill=False,
-                                       edgecolor="cyan", ls=":", lw=0.8))
+                                       edgecolor="magenta", ls=":", lw=0.8))
     # Equal data scaling (1 nm identical on x and y) on every panel.
     if region is None:
         xticks = np.arange(np.ceil(xlim[0]), np.floor(xlim[1]) + 1)

@@ -16,10 +16,10 @@ JSONs, which already apply this same convention.
 
 Inputs (all in ``data/``):
   * ``lipprops_area_per_lipid.npz``   -- APL  (per-rep key ``{ff}_{lipid}_eq{n}``, 2-D frames x lipids)
-  * ``lipprops_memb_thickness.npz``   -- bilayer thickness (per-rep, 1-D per frame, Angstrom)
+  * ``lipprops_memb_thickness.npz``   -- P-P thickness d_HH (per-rep, 1-D per frame, Angstrom)
+  * ``core_thickness.npz``            -- d_HC, lipyphilic key ``{ff}_{lipid}_lipy_rep{n}`` (nm; optional)
   * ``lipprops_registration.npz``     -- inter-leaflet registration (per-rep, 1-D per frame)
   * ``lipprops_lateral_diffusion.npz``-- fitted D, key ``{ff}_{lipid}_D`` (3 reps, cm^2/s)
-  * ``lipprops_order_parameter.npz``  -- S_CC samples, key ``{ff}_{lipid}_eq{n}`` (chain-frames x carbons)
   * ``{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`` -- g_lomepro -S_CD (col2 = mean, col3 = SD-over-lipids)
   * ``tilt_moduli_summary.json``      -- ost_pymodules chi (kJ/mol/rad^2)
   * ``lipidator_moduli_summary.json`` -- Lipidator kappa_theta (kJ/mol/nm^2)
@@ -80,22 +80,23 @@ def scd_rep_scalars(ff, lipid):
 
 def load():
     need = ["lipprops_area_per_lipid.npz", "lipprops_memb_thickness.npz",
-            "lipprops_registration.npz", "lipprops_lateral_diffusion.npz",
-            "lipprops_order_parameter.npz", "tilt_moduli_summary.json",
+            "lipprops_lateral_diffusion.npz", "tilt_moduli_summary.json",
             "lipidator_moduli_summary.json"]
     missing_files = [f for f in need if not (DATA / f).exists()]
     if missing_files:
         raise SystemExit("missing input files: %s" % ", ".join(missing_files))
     npz = {k: np.load(DATA / ("lipprops_%s.npz" % k))
-           for k in ["area_per_lipid", "memb_thickness", "registration",
-                     "lateral_diffusion", "order_parameter"]}
+           for k in ["area_per_lipid", "memb_thickness", "lateral_diffusion"]}
     tilt = json.load(open(DATA / "tilt_moduli_summary.json"))
     lipd = json.load(open(DATA / "lipidator_moduli_summary.json"))
-    return npz, tilt, lipd
+    # d_HC (hydrophobic core, lipyphilic first-tail-carbon metric); optional.
+    ct = (np.load(DATA / "core_thickness.npz")
+          if (DATA / "core_thickness.npz").exists() else None)
+    return npz, tilt, lipd, ct
 
 
 def collect():
-    npz, tilt, lipd = load()
+    npz, tilt, lipd, ct = load()
     rows = {}          # (ff, lipid) -> {param: (mean, sd) or None}
     missing = []       # (ff, lipid, param) with no data
     for ff, _ in FORCEFIELDS:
@@ -106,13 +107,13 @@ def collect():
                 npz["area_per_lipid"], ff, lipid, lambda a: float(a.mean())))
             cell["thick"] = summarise_reps(rep_scalar_from_npz(
                 npz["memb_thickness"], ff, lipid, lambda a: float(a.mean()) / 10.0))  # A -> nm
-            cell["reg"] = summarise_reps(rep_scalar_from_npz(
-                npz["registration"], ff, lipid, lambda a: float(a.mean())))
+            # d_HC: first-tail-carbon MembThickness, per-rep mean (already nm).
+            cell["dhc"] = (summarise_reps(
+                [float(ct[key].mean()) if (key := "%s_%s_lipy_rep%d" % (ff, lipid, n))
+                 in ct.files else None for n in REPS]) if ct is not None else None)
             dkey = "%s_%s_D" % (ff, lipid)
-            cell["diff"] = (summarise_reps([v * 1e7 for v in npz["lateral_diffusion"][dkey]])
-                            if dkey in npz["lateral_diffusion"].files else None)  # cm^2/s -> 1e-7
-            cell["scc"] = summarise_reps(rep_scalar_from_npz(
-                npz["order_parameter"], ff, lipid, lambda a: float(a.mean())))
+            cell["diff"] = (summarise_reps([v * 1e8 for v in npz["lateral_diffusion"][dkey]])
+                            if dkey in npz["lateral_diffusion"].files else None)  # cm^2/s -> um^2/s
             # --- g_lomepro ---
             cell["scd"] = summarise_reps(scd_rep_scalars(ff, lipid))
             # --- tilt moduli (already mean/SD over reps in the JSONs) ---
@@ -132,14 +133,38 @@ def collect():
 COLS = [
     ("apl",   "APL",             r"\AA$^2$",                          1),
     ("thick", r"$d_{\mathrm{HH}}$", "nm",                            2),
-    ("reg",   "Reg.",            "--",                                3),
-    ("diff",  r"$D$",            r"$10^{-7}$\,cm$^2$\,s$^{-1}$",      2),
-    ("scc",   r"$\langle S_{CC}\rangle$", "--",                      3),
+    ("dhc",   r"$d_{\mathrm{HC}}$", "nm",                            2),
+    ("diff",  r"$D$",            r"µm$^2$\,s$^{-1}$",                 1),
     ("scd",   r"$\langle -S_{CD}\rangle$", "--",                     3),
     ("chi",   r"$\chi$",         r"kJ\,mol$^{-1}$\,rad$^{-2}$",       1),
     ("kappa", r"$\kappa_\theta$", r"kJ\,mol$^{-1}$\,nm$^{-2}$",       1),
 ]
-GROUPS = [("lipyphilic", 5), ("g\\_lomepro", 1), ("tilt modulus", 2)]
+GROUPS = [
+    (r"lipyphilic\cite{smith2021lipyphilic}", 4),
+    (r"g\_lomepro\cite{gapsys2013computational}", 1),
+    (r"tilt modulus\cite{johner2014curvature,allolio2018local}", 2),
+]
+
+# Experimental reference values + citations, hardcoded from the literature (one
+# extra "Exp" row per lipid).  Keyed by COLS column key; a missing key -> blank
+# cell.  Except where a temperature is noted inline, values are for T = 30 C.
+EXPERIMENTAL = {
+    "DOPC": {
+        "apl":   r"$72.5$\cite{nagle2000structure}",
+        "thick": r"$3.69$\cite{nagle2000structure}",
+        "diff":  r"$\approx12$ ($308$\,K)\cite{filippov2003effect}",
+    },
+    "DMPC": {
+        "apl":   r"$59.6$\cite{nagle2000structure}",
+        "thick": r"$3.6$\cite{schuy2006thermal}",
+        "diff":  r"$\approx11$ ($308$\,K)\cite{filippov2003effect}",
+    },
+    "DMPG": {
+        "apl":   r"$65.1$\cite{pan2012molecular}",
+        "thick": r"$3.25$\cite{pan2012molecular}",
+        "diff":  r"$11.8$ ($309$ K)\cite{pali1989restricted}",
+    },
+}
 
 
 def fmt(cell, dec):
@@ -160,7 +185,7 @@ def build_latex(rows):
     lines.append("\\begin{tabular}{ll" + "c" * len(COLS) + "}")
     lines.append("\\toprule")
     # group header row
-    grp = ["\\multicolumn{2}{c}{}"]
+    grp = ["\\multicolumn{2}{c}{Software}"]
     start = 2
     cmids = []
     for name, span in GROUPS:
@@ -175,26 +200,33 @@ def build_latex(rows):
     units = ["", ""] + ["{\\footnotesize %s}" % u for _, _, u, _ in COLS]
     lines.append(" & ".join(units) + " \\\\")
     lines.append("\\midrule")
-    for li, lipid in enumerate(LIPIDS):
+    for lipid in LIPIDS:
         for fi, (ff, fflabel) in enumerate(FORCEFIELDS):
             cell = rows[(ff, lipid)]
             first = ("\\multirow{%d}{*}{%s}" % (len(FORCEFIELDS), lipid)
                      if fi == 0 else "")
             vals = [fmt(cell[k], dec) for k, _, _, dec in COLS]
             lines.append(" & ".join([first, fflabel] + vals) + " \\\\")
-        if li != len(LIPIDS) - 1:
-            lines.append("\\midrule")
+        # experimental reference row for this lipid
+        exp = EXPERIMENTAL.get(lipid, {})
+        exp_vals = [exp.get(k, "") for k, _, _, _ in COLS]
+        lines.append(" & ".join(["", "Exp"] + exp_vals) + " \\\\")
+        lines.append("\\midrule")
     lines.append("\\bottomrule")
     lines.append("\\end{tabular}")
     lines.append("\\caption{Equilibrium membrane properties by lipid and force field "
                  "(mean $\\pm$ SD over three replicate simulations). "
                  "$d_{\\mathrm{HH}}$: phosphate--phosphate bilayer thickness; "
-                 "Reg.: inter-leaflet registration; $D$: lateral diffusion coefficient; "
-                 "$\\langle S_{CC}\\rangle$ / $\\langle -S_{CD}\\rangle$: chain-averaged "
-                 "order parameters (lipyphilic / g\\_lomepro); "
+                 "$d_{\\mathrm{HC}}$: hydrophobic-core thickness (first-tail-carbon "
+                 "MembThickness; agrees with the tail mass-density width at "
+                 "$500$\\,kg\\,m$^{-3}$ to $\\sim0.02$\\,nm); "
+                 "$D$: lateral diffusion coefficient; "
+                 "$\\langle -S_{CD}\\rangle$: chain-averaged "
+                 "order parameter (g\\_lomepro); "
                  "$\\chi$: per-lipid tilt modulus (OpenStructure/ost\\_pymodules); "
                  "$\\kappa_\\theta$: area-normalised tilt modulus (Lipidator/ReSiS). "
-                 "$T=310$\\,K.}")
+                 "Simulations: $T=310$\\,K. Except where indicated, experimental values "
+                 "are for $T= 30^{\\circ}$\\,C ($303.15$\\,K)}")
     lines.append("\\label{tab:equilibrium_properties}")
     lines.append("\\end{table}")
     return "\n".join(lines) + "\n"

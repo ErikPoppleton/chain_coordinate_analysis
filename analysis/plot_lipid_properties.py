@@ -6,8 +6,10 @@ property to ``plots/``.  Each figure is a 1x3 row of panels (DOPC, DMPC, DMPG);
 within a panel the three force fields (CHARMM, AMBER, SLipids) are overlaid in
 the shared colour scheme from ``palette.py``.
 
-  * area_per_lipid, memb_thickness, registration, order_parameter
+  * area_per_lipid, memb_thickness, registration
         -> overlaid histograms (density-normalised).
+  * S_CD order parameter (g_lomepro)
+        -> per-carbon profile, carbon number down an inverted y-axis.
   * lateral_diffusion
         -> MSD vs lag time (mean over replicates, shaded spread) plus an inset
            bar graph of the fitted diffusion coefficient.
@@ -35,7 +37,7 @@ LIPIDS = ["DOPC", "DMPC", "DMPG"]
 # mean +/- SD over lipids; the whole-membrane properties are one value per frame.
 HIST_PROPS = [
     ("area_per_lipid", "Area per lipid", r"APL ($\mathrm{\AA}^2$)", 1.0, True),
-    ("memb_thickness", "Membrane thickness", r"thickness ($\mathrm{\AA}$)", 1.0, False),
+    ("memb_thickness", "Membrane thickness", r"$d_\mathrm{HH}$ (nm)", 0.1, False),
     ("registration", "Interleaflet registration", "registration coefficient", 1.0, False),
 ]
 
@@ -99,6 +101,70 @@ def plot_histograms(stem, title, xlabel, scale):
     print(f"wrote {out}")
 
 
+def plot_core_thickness_histograms():
+    """d_HC companion to the d_HH (memb_thickness) histogram.
+
+    Reads the per-frame **lipyphilic** hydrophobic-core thickness from
+    ``core_thickness.npz`` (the only d_HC metric stored per frame -- the density
+    metric is 3 scalars/system and can't form a distribution), pools the 3
+    replicates (250 frames each, last 50 ns) and draws the same 1x3 overlaid
+    density histogram as ``plot_histograms`` -> ``plots/lipprop_core_thickness.png``.
+    Units are nm (the standard core-thickness unit; d_HH is in A)."""
+    path = DATA / "core_thickness.npz"
+    if not path.exists():
+        print(f"skip core_thickness: {path} not found")
+        return
+    data = np.load(path)
+    reps = (1, 2, 3)
+
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4), sharex=True)
+    any_data = False
+    for ax, lipid in zip(axes, LIPIDS):
+        pooled = {}
+        for ff, _, _ in FORCEFIELDS:
+            arrs = [data[k] for r in reps
+                    if (k := f"{ff}_{lipid}_lipy_rep{r}") in data.files]
+            if arrs:
+                pooled[ff] = np.concatenate([np.ravel(a) for a in arrs])
+        if pooled:
+            allv = np.concatenate(list(pooled.values()))
+            # 27 bins = 40/1.5, i.e. 1.5x wider bins than the shared 40-bin
+            # default, to smooth the otherwise-jagged core-thickness histograms.
+            bins = np.linspace(np.nanmin(allv), np.nanmax(allv), 28)
+        for ff, label, color in FORCEFIELDS:
+            if ff not in pooled:
+                continue
+            any_data = True
+            vals = pooled[ff]
+            ax.hist(vals, bins=bins, density=True, color=color,
+                    histtype="stepfilled", alpha=0.35, label=label)
+            ax.hist(vals, bins=bins, density=True, color=color,
+                    histtype="step", lw=1.5)
+            ax.axvline(np.nanmean(vals), color=color, ls="--", lw=1.3)
+        ax.set_title(lipid)
+        ax.set_xlabel("$d_\\mathrm{HC}$ (nm)")
+        ax.tick_params(axis="y", right=True)
+    axes[0].set_ylabel("density")
+    if not any_data:
+        plt.close(fig)
+        print("skip core_thickness: no systems present in npz")
+        return
+    handles, labels = axes[0].get_legend_handles_labels()
+    if not handles:
+        for ax in axes:
+            h, l = ax.get_legend_handles_labels()
+            if h:
+                handles, labels = h, l
+                break
+    fig.legend(handles, labels, loc="upper right", ncol=len(FORCEFIELDS))
+    fig.suptitle("Hydrophobic-core thickness $d_\\mathrm{HC}$ (lipyphilic)")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    out = PLOTS / "lipprop_core_thickness.png"
+    fig.savefig(out, dpi=300)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
 # Candidate inset corners as [x0, y0, w, h] in axes fractions.  The top-left box
 # keeps its bottom at 0.57 (so its overlap with the curves -- hence the chosen
 # corner -- is unchanged) but stops at 0.86 rather than ~0.95, leaving a fixed
@@ -131,7 +197,7 @@ def plot_lateral_diffusion():
     any_data = False
     panels = {}  # lipid -> (list of (lag, mean) curves, bar-graph arrays)
     for ax, lipid in zip(axes, LIPIDS):
-        # Fitted D (10^-7 cm^2/s), one bar per force field, drawn as an inset.
+        # Fitted D (µm^2/s), one bar per force field, drawn as an inset.
         curves = []
         bar_x, bar_h, bar_e, bar_c = [], [], [], []
         for i, (ff, label, color) in enumerate(FORCEFIELDS):
@@ -154,7 +220,7 @@ def plot_lateral_diffusion():
                 lo = np.clip(mean - sd, 1e-6, None)
                 ax.fill_between(lag, lo, mean + sd, color=color, alpha=0.2, lw=0)
 
-            D = data[f"{ff}_{lipid}_D"] * 1e7  # -> 10^-7 cm^2/s
+            D = data[f"{ff}_{lipid}_D"] * 1e8  # cm^2/s -> µm^2/s
             bar_x.append(i)
             bar_h.append(np.mean(D))
             bar_e.append(np.std(D) if D.size > 1 else 0.0)
@@ -191,7 +257,7 @@ def plot_lateral_diffusion():
         inset.set_xticklabels([FORCEFIELDS[i][0].upper()[:1] for i in bar_x],
                               fontsize=7)
         inset.tick_params(labelsize=7)
-        inset.set_title(r"$D$ ($10^{-7}\,\mathrm{cm^2/s}$)", fontsize=7)
+        inset.set_title(r"$D$ ($\mathrm{\mu m^2/s}$)", fontsize=7)
     handles, labels = [], []
     for ax in axes:
         h, l = ax.get_legend_handles_labels()
@@ -211,80 +277,17 @@ def plot_lateral_diffusion():
     print(f"wrote {out}")
 
 
-def plot_order_parameter():
-    """S_CC-vs-carbon profiles, drawn the way lipids are conventionally shown:
-    carbon number down the y-axis (C1/headgroup at top, tail end at bottom) and
-    the order parameter along the x-axis.
-
-    The npz holds the full per-carbon S_CC for every chain and frame, one array
-    ``{ff}_{lipid}_eq{r}`` of shape (n_chain_frames, n_carbons) per replicate;
-    the profile is the mean over that sample axis, and the shaded band is the
-    spread across the per-replicate profiles."""
-    data = load("order_parameter")
-    if data is None:
-        print("skip order_parameter: npz not found")
-        return
-
-    fig, axes = plt.subplots(1, 3, figsize=(13, 4.5), sharex=True)
-    any_data = False
-    for ax, lipid in zip(axes, LIPIDS):
-        cmax = 0
-        for ff, label, color in FORCEFIELDS:
-            ck = f"{ff}_{lipid}_carbons"
-            if ck not in data.files:
-                continue
-            reps = sorted(int(k.rsplit("_eq", 1)[1])
-                          for k in data.files if k.startswith(f"{ff}_{lipid}_eq"))
-            if not reps:
-                continue
-            any_data = True
-            carbons = data[ck]
-            # Mean over all chain-frame samples in each replicate -> per-rep profile.
-            profiles = np.array([data[f"{ff}_{lipid}_eq{r}"].mean(axis=0) for r in reps])
-            mean = profiles.mean(axis=0)
-            cmax = max(cmax, int(carbons.max()))
-            ax.plot(mean, carbons, color=color, marker="o", ms=3, lw=1.5, label=label)
-            if len(profiles) > 1:
-                sd = profiles.std(axis=0)
-                ax.fill_betweenx(carbons, mean - sd, mean + sd, color=color,
-                                 alpha=0.2, lw=0)
-        ax.set_title(lipid)
-        ax.set_xlabel(r"$S_\mathrm{CC}$")
-        # Carbon 1 at the top, terminal carbon at the bottom.
-        if cmax:
-            ax.set_ylim(cmax + 1, 0.5)
-        ax.tick_params(axis="y", right=True)
-    axes[0].set_ylabel("tail carbon number")
-    if not any_data:
-        plt.close(fig)
-        print("skip order_parameter: no systems present in npz")
-        return
-    handles, labels = [], []
-    for ax in axes:
-        h, l = ax.get_legend_handles_labels()
-        if h:
-            handles, labels = h, l
-            break
-    fig.legend(handles, labels, loc="upper right", ncol=len(FORCEFIELDS))
-    fig.suptitle(r"Acyl chain order parameter $S_\mathrm{CC}$")
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    out = PLOTS / "lipprop_order_parameter.png"
-    fig.savefig(out, dpi=300)
-    plt.close(fig)
-    print(f"wrote {out}")
-
-
 def plot_scd():
     """S_CD (deuterium) order-parameter profiles from g_lomepro's ``-order`` output.
 
-    Same layout as ``plot_order_parameter`` (S_CC): carbon number down an inverted
-    y-axis (C2/headgroup end at top, tail end at bottom), order parameter on x, the
-    three force fields overlaid per lipid panel.
+    Carbon number runs down an inverted y-axis (C2/headgroup end at top, tail end
+    at bottom), order parameter on x, the three force fields overlaid per lipid
+    panel.
 
     Reads ``data/{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`` -- g_lomepro's
     ``_AVG_sn{1,2}.dat`` output copied per replicate, columns
     ``carbon_number, mean(-S_CD), sd``.  To match the per-replicate error scheme
-    used everywhere else (see ``plot_order_parameter``), the two tails are
+    used everywhere else, the two tails are
     averaged *within* each replicate to give one profile per replicate; the line
     is the mean over replicates and the band the **SD across replicates**.
     (Files with no replicate token are treated as a single replicate.)"""
@@ -405,7 +408,7 @@ def main():
     for stem, title, xlabel, scale, per_lipid in HIST_PROPS:
         plot_histograms(stem, title, xlabel, scale)
         plot_trajectories(stem, title, xlabel, scale, per_lipid)
-    plot_order_parameter()
+    plot_core_thickness_histograms()
     plot_scd()
     plot_lateral_diffusion()
 

@@ -31,6 +31,9 @@ Per-frame observables (the ones with a genuine time axis in ``data/lipprops_*.np
   * ``registration``  -- inter-leaflet registration per frame
   * ``scc``           -- chain-averaged S_CC per frame (mean over both tails,
                          all chains, all carbons)
+  * ``tilt``          -- per-frame lipid-tilt spread <delta theta^2> (rad^2), the
+                         quantity the tilt modulus chi is fitted from (read from
+                         the OST pipeline's ``data/tilt_series_{ff}_{lipid}_{rep}.npz``)
 ``lateral_diffusion`` is excluded: D is one fitted scalar per run and the MSD is
 a cumulative (nonstationary) curve, neither of which is a stationary timeseries.
 
@@ -140,6 +143,11 @@ def series_for(npzs, ff, lipid, rep):
         m = arr.shape[0] // (2 * F)
         if 2 * F * m == arr.shape[0]:
             out["scc"] = arr.reshape(2, F, m, nc).mean(axis=(0, 2, 3))
+    tilt = DATA / ("tilt_series_%s_%d.npz" % (sys, rep))
+    if tilt.exists():                                  # OST per-frame tilt spread
+        with np.load(tilt) as tz:
+            if "theta_var" in tz.files:
+                out["tilt"] = np.asarray(tz["theta_var"], dtype=float)
     ct = npzs.get("core_thickness")                    # optional: d_HC per frame (nm)
     if ct is not None:
         ckey = "%s_lipy_rep%d" % (sys, rep)            # note: _lipy_rep, not _eq
@@ -148,8 +156,9 @@ def series_for(npzs, ff, lipid, rep):
     return out
 
 
-OBSERVABLES = ["apl", "thickness", "dhc", "registration", "scc"]
-UNITS = {"apl": "A^2", "thickness": "A", "dhc": "nm", "registration": "", "scc": ""}
+OBSERVABLES = ["apl", "thickness", "dhc", "tilt", "registration", "scc"]
+UNITS = {"apl": "A^2", "thickness": "A", "dhc": "nm", "tilt": "rad^2",
+         "registration": "", "scc": ""}
 
 
 def decompose(rows):

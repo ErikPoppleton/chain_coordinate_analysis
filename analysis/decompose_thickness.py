@@ -36,6 +36,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
+import figstyle as fs
 from palette import FORCEFIELDS
 from lipiddefs import LIPIDS, REPS
 
@@ -136,8 +137,20 @@ def report(name, systems, means):
           f"(headgroup SD {d['sd_head']:.3f} nm)")
 
 
+LEGEND_BAND_MM = 5.0     # top strip for the core/headgroup key
+FIG_H_MM = 70.0
+
+
 def plot(stats):
-    fig, axes = plt.subplots(1, 3, figsize=(13, 4.5), sharey=True)
+    """Stacked core + headgroup bars, one panel per lipid, at the house
+    **180 mm** width (``figstyle``): 9 pt labels, 7 pt ticks, ticks inside.
+
+    Note ``bbox_inches`` is deliberately *not* passed to ``savefig`` -- a tight
+    bbox shrink-wraps the canvas and the 180 mm width is the point.
+    """
+    fs.use()
+    fig, axes = fs.figure_grid(1, len(LIPIDS), height_mm=FIG_H_MM,
+                              label_band_mm=LEGEND_BAND_MM, sharey=True)
     for ax, lipid in zip(axes, LIPIDS):
         for i, (ff, label, color) in enumerate(FORCEFIELDS):
             s = stats.get((ff, lipid))
@@ -147,18 +160,19 @@ def plot(stats):
             ax.bar(i, hc, 0.7, color=color, edgecolor="black", lw=0.5)
             ax.bar(i, H, 0.7, bottom=hc, color=color, edgecolor="black", lw=0.5,
                    hatch="///", alpha=0.45)
-            ax.errorbar(i, hh, yerr=s["hh_sd"], color="black", capsize=4, lw=1.2)
+            ax.errorbar(i, hh, yerr=s["hh_sd"], color="black", capsize=2, lw=1.0)
             ax.text(i, hc / 2, f"{hc:.2f}", ha="center", va="center",
-                    fontsize=8, color="white")
+                    fontsize=fs.TICK_PT, color="white")
             ax.text(i, hc + H / 2, f"{H:.2f}", ha="center", va="center",
-                    fontsize=8, color="black")
-            # within-run tail<->head coupling under the bar.
+                    fontsize=fs.TICK_PT, color="black")
+            # within-run tail<->head coupling, inside the foot of the bar
+            # (white: grey on the saturated bar colours was unreadable).
             ax.text(i, 0.06, f"r={s['r_core_head'][0]:+.2f}", ha="center",
-                    va="bottom", fontsize=7, color="0.25")
+                    va="bottom", fontsize=fs.TICK_PT - 1, color="white")
         ax.set_title(lipid)
         ax.set_xticks(range(len(FORCEFIELDS)))
         ax.set_xticklabels([l for _, l, _ in FORCEFIELDS])
-        ax.grid(axis="y", lw=0.3, alpha=0.4)
+        fs.categorical_x(ax)          # force fields are categories, not a scale
     axes[0].set_ylabel("thickness (nm)")
     handles = [
         Patch(facecolor="0.55", edgecolor="black", label="core $d_\\mathrm{HC}$ (tails)"),
@@ -166,15 +180,13 @@ def plot(stats):
               label="headgroup $H=d_\\mathrm{HH}-d_\\mathrm{HC}$"),
     ]
     fig.legend(handles=handles, loc="upper center", ncol=2, frameon=False,
-               bbox_to_anchor=(0.5, 1.0))
-    fig.suptitle("$d_\\mathrm{HH}$ decomposed into hydrophobic core + headgroup "
-                 "(per-frame; $r$ = within-run core–head coupling)", y=1.05)
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
+               bbox_to_anchor=(0.5, 1.0), handlelength=1.4, handleheight=0.9)
     PLOTS.mkdir(parents=True, exist_ok=True)
     out = PLOTS / "thickness_decomposition.png"
-    fig.savefig(out, dpi=300, bbox_inches="tight")
+    fig.savefig(out)
     plt.close(fig)
-    print(f"\nwrote {out}")
+    w_mm = fig.get_size_inches()[0] * 25.4
+    print(f"\nwrote {out}  ({w_mm:.2f} x {fig.get_size_inches()[1] * 25.4:.2f} mm)")
 
 
 def main():

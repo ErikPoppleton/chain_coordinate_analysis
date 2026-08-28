@@ -247,16 +247,19 @@ EXPERIMENTAL = {
     "DOPC": {
         "apl":   r"$72.5$\cite{nagle2000structure}",
         "thick": r"$3.69$\cite{nagle2000structure}",
+        "dhc":   r"$2.71$\cite{nagle2000structure}",
         "diff":  r"$\approx12$ ($308$\,K)\cite{filippov2003effect}",
     },
     "DMPC": {
         "apl":   r"$59.6$\cite{nagle2000structure}",
-        "thick": r"$3.6$\cite{schuy2006thermal}",
+        "thick": r"$3.60$\cite{nagle2000structure,schuy2006thermal}",
+        "dhc":   r"$2.62$\cite{nagle2000structure}",
         "diff":  r"$\approx11$ ($308$\,K)\cite{filippov2003effect}",
     },
     "DMPG": {
         "apl":   r"$65.1$\cite{pan2012molecular}",
         "thick": r"$3.25$\cite{pan2012molecular}",
+        "dhc":   r"$2.36$\cite{pan2012molecular}",
         "diff":  r"$11.8$ ($309$ K)\cite{pali1989restricted}",
     },
 }

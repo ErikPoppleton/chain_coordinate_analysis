@@ -107,7 +107,8 @@ libraries (needed for the water/lipid density interface). This was terrible to g
 
 The analysis pipeline has a series of steps which must be run in order to complete successfully. Within each step, there are branches which are independent and can be run in any order/in parallel.
 The sequence is:  
-**Step 0 preprocessing → all raw-data branches → `stats.py` → tables/plotting.**
+**Step 0 preprocessing → all raw-data branches → `stats.py` → the two production-span
+tilt steps (`refit_tilt_t0.py`, `run_lipidator_blocks.py`) → tables/plotting.**
 The pore-formation half of the project is a separate pipeline — see §4.
 
 ### Step 0 — preprocessing: trajectories, downloads, index files
@@ -244,12 +245,21 @@ python analysis/core_thickness.py            # -> data/core_thickness.npz
 `tilt_modulus.py` (χ + block-averaged within-run SEM) → deletes the bulky dcd.
 Set the path to your OpenStructure interpreter at the top of `run_tilt.sh`.
 
-### Branch D — tilt modulus, Lipidator/ReSiS  *(local; needs the `resis` binary)* — **needs Branch C**
+χ is then **refit on the production span** once `stats.py` (Step E) has supplied
+`t₀` — cheap, since the raw per-frame tilts are already in `tilt_series_*.npz`:
+
+```bash
+# AFTER Step E; rewrites data/tilt_moduli.json in place (idempotent)
+~/miniconda3/envs/openstructure/bin/python analysis/refit_tilt_t0.py
+```
+
+### Branch D — tilt modulus, Lipidator/ReSiS  *(local; needs the `resis` binary)* — **needs Branch C + Step E**
 
 ```bash
 python analysis/make_lipidator_index.py   # -> data/lipidator_{ff}_{lipid}.ndx
-python analysis/run_lipidator.py          # -> data/lipidator_moduli.json  (kappa per rep)
-# within-run error: runs resis on trajectory block-slices; reuses g_var from tilt_moduli.json
+python analysis/run_lipidator.py          # -> data/lipidator_moduli.json  (kappa per rep, whole run)
+# production-span kappa + within-run error: runs resis on trajectory slices [t0:];
+# reuses t0 from equilibrium_timeseries_stats.json and g_var from tilt_moduli.json
 python analysis/run_lipidator_blocks.py   # -> data/lipidator_blocks.json
 ```
 Note that Lipidator requires 'directors', custom formatted atom selections for determining lipid orientation. The directors used by `run_lipidator.py` were built with `make_director.py`:
@@ -266,8 +276,11 @@ python analysis/stats.py                   # -> data/equilibrium_timeseries_stat
 
 Per (ff, lipid, rep, observable): pymbar `detect_equilibration` → t₀, and the
 statistical inefficiency `g` / `Neff` on the production span `[t₀, T]`.
-**Run this before any table/plot below**, which read t₀ from its JSON to drop
-the burn-in (critical for the slow-equilibrating AMBER/SLipids DMPG systems).
+Observables are APL, d_HH, d_HC, the per-frame tilt spread ⟨δθ²⟩ (from Branch
+C's `tilt_series_*.npz`), registration and S_CC — so run it **after** Branches
+A/B/C. **Run this before any table/plot below**, and before `refit_tilt_t0.py`
+and `run_lipidator_blocks.py`, all of which read t₀ from its JSON to drop the
+burn-in (critical for the slow-equilibrating AMBER/SLipids DMPG systems).
 
 ### Step F — tables & figures  *(local; needs numpy + matplotlib)*
 Requires all previous steps to have completed successfully and the `.npz`/`.dat` files to have been downloaded from the cluster-side `data/` directory.
@@ -283,9 +296,11 @@ python analysis/decompose_thickness.py       # -> plots/thickness_decomposition.
 python analysis/plot_density.py              # -> plots/density_profiles.png
 ```
 
-**Dependency summary:** `C → D` (lipidator blocks reuse tilt `g_var`); `A,B → E`;
-`E → make_equilibrium_table, make_equilibration_table, plot_lipid_properties`
-(t₀); `D → make_equilibrium_table, plot_lipidator` (κ CI); `C → make_equilibrium_table, plot_tilt_modulus` (χ CI).
+**Dependency summary:** `A,B,C → E` (E's ⟨δθ²⟩ observable needs C's tilt series);
+`E → refit_tilt_t0, D` (both slice to t₀; D also reuses tilt `g_var`);
+`E → make_equilibrium_table, make_equilibration_table, plot_lipid_properties` (t₀);
+`D → make_equilibrium_table, plot_lipidator` (κ CI);
+`C + refit_tilt_t0 → make_equilibrium_table, plot_tilt_modulus` (χ CI).
 
 ---
 
@@ -400,6 +415,35 @@ traces as `data/{ff}_{lipid}_close{1..10}_pullx.xvg`:
 ```bash
 python analysis/plot_close_pullx.py     # -> plots/close_pullx_{lipid}.png (one panel per ff, 10 replicates)
 ```
+
+### 4c′ — Snapshot renders  *(local; needs PyMOL)*
+
+The rendered pore images used by `make_figures.py`, Figure 2d and Figure 4g–i
+are produced from the configurations in `snapshots/`:
+
+```bash
+python analysis/render_snapshots.py     # -> snapshots/{ff}_{lipid}_{last,close}.png (18 panels, ~16 s)
+python analysis/render_snapshots.py --ff charmm --lipid DMPC --set last   # a subset
+python analysis/render_snapshots.py --dry-run                            # write the .pml only
+```
+
+Inputs are `snapshots/{ff}_{lipid}_last_conf.gro` (end-of-umbrella pore) and
+`{ff}_{lipid}_close.gro` (closed pore); a `*_renumbered.gro` is preferred where
+one exists. The chain-coordinate cylinder drawn in the `last` panels cannot be
+recomputed locally — it comes from the run's `slurm.*.err` via
+`cylinder_pml.sh` — so its geometry is read back out of the committed
+`snapshots/{ff}_{lipid}_cyl_style.pml`, which stays the source of truth for it.
+The `cyl` command itself is the `~/.pymol/draw_cylinder.py` plugin loaded from
+`.pymolrc`, so do **not** run PyMOL with `-k`.
+
+The clipping planes are widened past the box after framing, since both PyMOL's
+auto-zoom (onto the small cylinder) and `zoom` otherwise leave a slab shallower than
+the system and slice the foreground spheres open.
+
+Output is 1358 × 1358 px on a transparent ground — 57.5 mm at 600 dpi, the
+panel size `make_figures.py` places at native scale. Re-run
+`analysis/make_figures.py`, `figures/fig02_pore_energy.py` and
+`figures/fig04_pore_occupancy.py` afterwards to pick the new renders up.
 
 ### 4d — Equilibrium properties vs the pore barrier
 

@@ -18,6 +18,8 @@ stats-module tests) -- close enough that a block size derived from it matches
 what pymbar would choose.
 """
 
+import math
+
 import numpy as np
 
 
@@ -220,3 +222,99 @@ def hierarchical_ci(series, t0s=None):
     return {"mean": grand, "ci_half": t * se, "se": se, "t": t, "dof": dof,
             "between_sd": between_sd, "within_sem": within_sem,
             "sigma_between": sigma_between, "regime": regime, "n": n}
+
+
+# ---------------------------------------------------------------------------
+# Significance testing between two systems, on the same hierarchical variance
+# model as the error bars.  A t-test over the raw frames would be
+# pseudoreplication (MD frames are correlated and n=3 runs, not n=2500), so the
+# comparison uses each system's hierarchical SE and d.o.f. from the dicts
+# returned above, combined Welch-style.
+# ---------------------------------------------------------------------------
+
+def _betacf(a, b, x, itmax=200, eps=3e-16, fpmin=1e-300):
+    """Continued fraction for the incomplete beta function (Lentz's method)."""
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < fpmin:
+        d = fpmin
+    d = 1.0 / d
+    h = d
+    for m in range(1, itmax + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < eps:
+            break
+    return h
+
+
+def betai(a, b, x):
+    """Regularised incomplete beta function I_x(a, b), pure numpy/stdlib."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    lbeta = (math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+             + a * math.log(x) + b * math.log(1.0 - x))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return math.exp(lbeta) * _betacf(a, b, x) / a
+    return 1.0 - math.exp(lbeta) * _betacf(b, a, 1.0 - x) / b
+
+
+def t_pvalue(t, dof):
+    """Two-sided Student-t p-value (no scipy)."""
+    dof = max(1.0, float(dof))
+    return float(betai(0.5 * dof, 0.5, dof / (dof + float(t) ** 2)))
+
+
+def compare(ci_a, ci_b):
+    """Welch-style two-sided test between two hierarchical-CI results.
+
+    ``ci_a``/``ci_b`` are the dicts from :func:`hierarchical_ci` or
+    :func:`hierarchical_ci_from_estimates`; the test uses their hierarchical
+    ``se`` (which already carries the max(between, within) variance choice) and
+    their ``dof``, so a system whose replicates disagree is *not* credited with
+    a significance it has not earned.  Returns ``{delta, se, t, dof, p}``.
+    """
+    if ci_a is None or ci_b is None:
+        return None
+    delta = ci_a["mean"] - ci_b["mean"]
+    va, vb = ci_a["se"] ** 2, ci_b["se"] ** 2
+    se = math.sqrt(va + vb)
+    if se == 0.0:
+        return {"delta": delta, "se": 0.0, "t": float("inf"), "dof": 1.0,
+                "p": 0.0}
+    t = delta / se
+    dof = (va + vb) ** 2 / (va ** 2 / max(1.0, ci_a["dof"])
+                            + vb ** 2 / max(1.0, ci_b["dof"]))
+    return {"delta": delta, "se": se, "t": t, "dof": dof,
+            "p": t_pvalue(t, dof)}
+
+
+def stars(p, ns="n.s."):
+    """Significance marker: *** p<0.0005, ** p<0.005, * p<0.05, else ``ns``."""
+    if p is None:
+        return ""
+    for thr, mark in ((5e-4, "***"), (5e-3, "**"), (5e-2, "*")):
+        if p < thr:
+            return mark
+    return ns

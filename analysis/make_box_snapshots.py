@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Render the **first and last frame** of one equilibrium trajectory as a pair of
+PyMOL snapshots sharing a single camera, for the SI box-z figure.
+
+Why a shared camera: the point of the pair is that the box *grows* along z over
+the run (AMBER DMPG: Box-Z 7.53 -> 9.01 nm), which is only legible if both
+panels are drawn at the same scale.  The zoom is therefore fitted once to the
+**union** of the two frames' atoms and reused for both renders, and the image
+aspect is set from that union box so the fit is not distorted by a square
+viewport.
+
+Style follows ``snapshots/*_style.pml`` (the ``make_figures`` panels) -- water
+and ions as spheres, ions coloured explicitly since a ``.gro`` carries no
+element column -- with three deliberate differences: the **lipid tails stay
+visible** (there is no pore to look through here), the background is
+**transparent** rather than grey, and there is no cylinder marker.
+
+    PYTHONNOUSERSITE=1 conda run -n lipid64 python analysis/make_box_snapshots.py
+    ->  snapshots/{ff}_{lipid}{rep}_{first,last}.{gro,png}
+
+Needs MDAnalysis (to slice the two frames out of the xtc) and ``pymol`` on PATH.
+"""
+
+import argparse
+import subprocess
+from pathlib import Path
+
+import MDAnalysis as mda
+
+from lipiddefs import WATER, SODIUM, CALCIUM, MAGNESIUM
+
+ROOT = Path(__file__).resolve().parent.parent
+TRAJ = ROOT / "traj"
+SNAP = ROOT / "snapshots"
+
+PX_H = 1181              # 50 mm at 600 dpi -- the SI figure's panel height
+BUFFER_A = 8.0           # zoom padding (A) -- keeps whole molecules in frame
+SOLVENT = sorted(set(WATER) | set(SODIUM) | set(CALCIUM) | set(MAGNESIUM))
+
+
+def esc(resn):
+    """PyMOL selection-safe resname ('Na+' -> 'Na\\+'; quoting does not work)."""
+    return resn.replace("+", r"\+").replace("-", r"\-")
+
+
+def write_frames(ff, lipid, rep):
+    """Write the first and last frame to .gro.
+
+    Returns ``(paths, extents)`` where ``extents[label] = (mins, maxs)`` is that
+    frame's own atom bounding box (A).  The framing is built from the atom
+    extent rather than the periodic box because ``trjconv -pbc mol`` leaves
+    whole molecules poking past the box faces, so a box-sized view clips them.
+    """
+    gro = TRAJ / f"{ff}_{lipid}.gro"
+    xtc = TRAJ / f"{ff}_{lipid}{rep}.xtc"
+    for p in (gro, xtc):
+        if not p.exists():
+            raise SystemExit(f"missing {p}")
+    u = mda.Universe(str(gro), str(xtc))
+    n = u.trajectory.n_frames
+    out, extents = {}, {}
+    for label, i in (("first", 0), ("last", n - 1)):
+        ts = u.trajectory[i]
+        extents[label] = (u.atoms.positions.min(axis=0),
+                          u.atoms.positions.max(axis=0))
+        p = SNAP / f"{ff}_{lipid}{rep}_{label}.gro"
+        u.atoms.write(str(p))
+        print(f"  frame {i:5d} (t = {ts.time / 1000:.0f} ns): box "
+              f"{ts.dimensions[0] / 10:.2f} x {ts.dimensions[1] / 10:.2f} x "
+              f"{ts.dimensions[2] / 10:.2f} nm -> {p.name}")
+        out[label] = p
+    return out, extents
+
+
+def union(extents):
+    """Bounding box covering every frame: ((xmin, ymin, zmin), (xmax, ...))."""
+    mins = [min(e[0][k] for e in extents.values()) for k in range(3)]
+    maxs = [max(e[1][k] for e in extents.values()) for k in range(3)]
+    return mins, maxs
+
+
+def build_pml(paths, extents, pml, pngs):
+    """PyMOL script: one shared camera *scale*, each frame centred in its panel.
+
+    ``turn x, 90`` puts the membrane normal (z) up the screen, so the view has
+    to cover the union atom extent in model x (across) and z (up).  The framing
+    is set by **camera arithmetic rather than ``zoom``**: in orthoscopic mode the
+    visible height in model units is ``2 * dist * tan(fov/2)``, so solving that
+    for ``dist`` covers exactly ``extent_z + 2*buffer``, and the image aspect is
+    set to the union extent's aspect so the width follows.  ``zoom`` alone
+    letterboxes against whatever viewport aspect PyMOL has in headless mode,
+    which left both panels padded and under-scaled.
+
+    Two centring subtleties:
+
+    * ``zoom`` leaves in-plane camera offsets from its own (letterboxed) fit;
+      keeping them while overriding only the distance pushed the content
+      off-centre (114 px of top margin against 32 px of bottom), so ``v[9:11]``
+      are zeroed and the rotation origin set explicitly.
+    * the origin is **per frame**, not the union centre.  Each bilayer is
+      centred in its *own* box, and the boxes differ in z, so a shared origin
+      left the shorter first frame riding high in its panel.  ``dist`` (the
+      scale) stays shared -- which is what makes the two boxes comparable --
+      while each frame is centred in its own panel.
+    """
+    (ux0, _, uz0), (ux1, _, uz1) = union(extents)
+    h_model = (uz1 - uz0) + 2 * BUFFER_A     # visible height (A)
+    w_model = (ux1 - ux0) + 2 * BUFFER_A
+    width = int(round(PX_H * w_model / h_model))
+    solvent_sel = " or ".join(f"resn {esc(r)}" for r in SOLVENT)
+    L = [
+        "# generated by analysis/make_box_snapshots.py -- do not edit",
+        f"load {paths['first']}, f_first",
+        f"load {paths['last']}, f_last",
+        "set sphere_scale, 0.5",
+        "set transparency_mode, 3",
+        "set orthoscopic, 1",
+        # Transparent ground, so the panels sit on the figure's own background.
+        "set ray_opaque_background, 0",
+        # PyMOL gives each loaded object a different carbon colour (green, then
+        # cyan), which would make the two frames look like different systems --
+        # so both are explicitly set to the green/by-element default.
+        'util.cbag("f_first or f_last")',
+        "# Lipid tails stay visible here (no pore to see through).",
+        "# Water/ions: hide first, because PyMOL's automatic styling on load",
+        "# differs per water resname (TP3 -> spheres, TIP3/SOL -> lines).",
+        f"hide everything, {solvent_sel}",
+        f"show spheres, {solvent_sel}",
+    ]
+    for resn, colour in (("Na+", "sodium"), ("NA", "sodium"), ("SOD", "sodium"),
+                         ("Cl-", "chlorine"), ("CL", "chlorine"),
+                         ("CLA", "chlorine"), ("MG", "magnesium"),
+                         ("CA", "calcium"), ("CAL", "calcium")):
+        L.append(f"color {colour}, resn {esc(resn)}")
+    L += [
+        "turn x, 90",
+        "set depth_cue, 0",
+        "set ray_trace_fog, 0",
+        "python",
+        "from math import radians, tan",
+        "from pymol import cmd",
+        f"h = {h_model:.3f}",
+        "fov = float(cmd.get('field_of_view'))",
+        "dist = 0.5 * h / tan(0.5 * radians(fov))",
+        "def frame_view(cx, cy, cz):",
+        "    v = list(cmd.get_view())",
+        "    v[9] = v[10] = 0.0                 # no in-plane camera offset",
+        "    v[11] = -dist                      # shared scale",
+        "    v[12], v[13], v[14] = cx, cy, cz   # this frame's own centre",
+        "    v[15], v[16] = dist - h, dist + h  # clipping planes",
+        "    cmd.set_view(v)",
+        "python end",
+    ]
+    for obj, label in (("f_first", "first"), ("f_last", "last")):
+        lo, hi = extents[label]
+        c = [0.5 * (float(lo[k]) + float(hi[k])) for k in range(3)]
+        L += ["disable *", f"enable {obj}",
+              "python",
+              f"frame_view({c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f})",
+              "python end",
+              f"png {pngs[label]}, width={width}, height={PX_H}, dpi=600, ray=1"]
+    L.append("quit")
+    pml.write_text("\n".join(L) + "\n")
+    return width
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ff", default="amber")
+    ap.add_argument("--lipid", default="DMPG")
+    ap.add_argument("--rep", type=int, default=1)
+    ap.add_argument("--pymol", default="pymol")
+    args = ap.parse_args()
+
+    SNAP.mkdir(exist_ok=True)
+    stem = f"{args.ff}_{args.lipid}{args.rep}"
+    paths, extents = write_frames(args.ff, args.lipid, args.rep)
+    pngs = {k: SNAP / f"{stem}_{k}.png" for k in paths}
+    pml = SNAP / f"{stem}_box_style.pml"
+    width = build_pml(paths, extents, pml, pngs)
+    (x0, _, z0), (x1, _, z1) = union(extents)
+    print(f"  union atom extent {(x1 - x0) / 10:.2f} x {(z1 - z0) / 10:.2f} nm "
+          f"-> render {width} x {PX_H} px")
+    subprocess.run([args.pymol, "-cq", str(pml)], check=True)
+    for p in pngs.values():
+        print(f"wrote {p}")
+
+
+if __name__ == "__main__":
+    main()

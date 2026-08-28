@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 r"""Supplementary (SI) table of the **equilibration analysis** for every
 per-frame equilibrium observable: the pymbar-detected equilibration time
-``t0``, the resulting production **window size**, the **total number of samples**
-(production frames) and the effective number of uncorrelated samples
-``N_eff`` -- one block per (lipid, force field), one row per observable, each
+``t0``, the production-region **statistical inefficiency** ``g``, the **total
+number of samples** (production frames) and the effective number of
+uncorrelated samples ``N_eff`` -- one block per (lipid, force field), one row per observable, each
 summarised as mean +/- SD across the three replicate simulations.
 
 Source is ``data/equilibrium_timeseries_stats.json`` (written by ``stats.py``,
 whose ``detect_equilibration`` picks ``t0 = argmax N_eff`` per Chodera 2016).
 Frames are converted to ns at **dt = 0.2 ns/frame** (verified from the stored
-MSD lag times).  Note the total trajectory differs by observable: APL, d_HH,
-S_CC and registration are the full **500 ns** equilibrium runs (2501 frames),
-while d_HC is computed on the **last 250 ns** (1251 frames, core_thickness).
+MSD lag times).  Rows are APL, d_HH, d_HC and the lipid-tilt spread
+<delta theta^2> (the per-frame OST quantity the tilt modulus chi is fitted
+from); S_CC and registration are omitted -- neither is reported anywhere else.
 
     python3 analysis/make_equilibration_table.py
     ->  data/equilibration_summary_table.tex   (+ a text preview)
@@ -36,9 +36,11 @@ OBS = [
     ("apl",          "APL"),
     ("thickness",    r"$d_{\mathrm{HH}}$"),
     ("dhc",          r"$d_{\mathrm{HC}}$"),
-    ("scc",          r"$S_{CC}$"),
-    ("registration", "Reg."),
+    ("tilt",         r"$\langle\delta\theta^{2}\rangle$"),
 ]
+
+# plain-text row labels for the terminal preview (the LaTeX ones don't strip well)
+PLAIN = {"apl": "APL", "thickness": "d_HH", "dhc": "d_HC", "tilt": "<dtheta^2>"}
 
 
 def total_ns(stats, okey):
@@ -67,7 +69,7 @@ def ms(vals, dec=0):
 
 
 def rows_for(stats, ff, lipid, obs):
-    """(t0_ns, window_ns, n_samples, neff) lists over reps, or None if absent."""
+    """(t0_ns, g_frames, n_samples, neff) lists over reps, or None if absent."""
     sysn = "%s_%s" % (ff, lipid)
     recs = stats.get(obs, {}).get(sysn)
     if not recs:
@@ -75,7 +77,8 @@ def rows_for(stats, ff, lipid, obs):
     t0 = np.array([r["t0"] for r in recs], dtype=float)
     N = np.array([r["N"] for r in recs], dtype=float)
     neff = np.array([r["Neff_max"] for r in recs], dtype=float)
-    return (t0 * NS_PER_FRAME, (N - t0) * NS_PER_FRAME, (N - t0), neff)
+    g = np.array([r["g_prod"] for r in recs], dtype=float)
+    return (t0 * NS_PER_FRAME, g, (N - t0), neff)
 
 
 def traj_len_sentence(stats):
@@ -103,8 +106,8 @@ def build_latex(stats):
     L.append("\\setlength{\\tabcolsep}{5pt}")
     L.append("\\begin{tabular}{lllcccc}")
     L.append("\\toprule")
-    L.append("Lipid & FF & Observable & $t_0$ & Window & $N$ & $N_\\mathrm{eff}$ \\\\")
-    L.append(" & & & {\\footnotesize (ns)} & {\\footnotesize (ns)} "
+    L.append("Lipid & FF & Observable & $t_0$ & $g$ & $N$ & $N_\\mathrm{eff}$ \\\\")
+    L.append(" & & & {\\footnotesize (ns)} & {\\footnotesize (frames)} "
              "& {\\footnotesize (frames)} & {\\footnotesize (uncorr.)} \\\\")
     L.append("\\midrule")
     for li, lipid in enumerate(LIPIDS):
@@ -114,8 +117,8 @@ def build_latex(stats):
                 if r is None:
                     cells = ["--"] * 4
                 else:
-                    t0, win, nsamp, neff = r
-                    cells = [ms(t0), ms(win), ms(nsamp), ms(neff)]
+                    t0, g, nsamp, neff = r
+                    cells = [ms(t0), ms(g, 1), ms(nsamp), ms(neff)]
                 lipcol = ("\\multirow{%d}{*}{%s}" % (len(FORCEFIELDS) * len(OBS), lipid)
                           if fi == 0 and oi == 0 else "")
                 ffcol = ("\\multirow{%d}{*}{%s}" % (len(OBS), fflabel)
@@ -130,11 +133,10 @@ def build_latex(stats):
     L.append("\\caption{Equilibration analysis of the per-frame equilibrium "
              "observables (mean $\\pm$ SD over three replicates).  $t_0$ is the "
              "equilibration time discarded (pymbar automatic detection, "
-             "$t_0=\\arg\\max N_\\mathrm{eff}$\\cite{chodera2016simple}); Window "
-             "$=T-t_0$ is the production span used for the reported means; $N$ is "
+             "$t_0=\\arg\\max N_\\mathrm{eff}$\\cite{chodera2016simple}); $g$ is the "
+             "statistical inefficiency of the production span $[t_0,T]$; $N$ is "
              "the number of production frames and $N_\\mathrm{eff}=(T-t_0)/g$ the "
-             "effective number of uncorrelated samples (statistical inefficiency "
-             "$g$).  Frames $\\to$ ns at $0.2$\\,ns/frame.  " + traj_len_sentence(stats) +
+             "effective number of uncorrelated samples.  Frames $\\to$ ns at $0.2$\\,ns/frame.  " + traj_len_sentence(stats) +
              "  The DMPG bilayers (especially AMBER) show long, replicate-variable "
              "$t_0$ from slow acyl-chain ordering, leaving few uncorrelated samples.}")
     L.append("\\label{tab:equilibration}")
@@ -143,19 +145,19 @@ def build_latex(stats):
 
 
 def preview(stats):
-    hdr = ["lipid", "ff", "obs", "t0(ns)", "window(ns)", "N", "Neff"]
+    hdr = ["lipid", "ff", "obs", "t0(ns)", "g(frames)", "N", "Neff"]
     print("  ".join("%-13s" % h for h in hdr))
     for lipid in LIPIDS:
         for ff, fflabel in FORCEFIELDS:
             for okey, olabel in OBS:
                 r = rows_for(stats, ff, lipid, okey)
-                lab = olabel.replace("$", "").replace("\\mathrm", "").replace("{", "").replace("}", "").replace("_", "")
+                lab = PLAIN.get(okey, okey)
                 if r is None:
                     vals = ["--"] * 4
                 else:
-                    t0, win, nsamp, neff = r
+                    t0, g, nsamp, neff = r
                     vals = ["%.0f±%.0f" % (np.mean(t0), np.std(t0)),
-                            "%.0f±%.0f" % (np.mean(win), np.std(win)),
+                            "%.1f±%.1f" % (np.mean(g), np.std(g)),
                             "%.0f" % np.mean(nsamp),
                             "%.0f±%.0f" % (np.mean(neff), np.std(neff))]
                 print("  ".join(["%-13s" % lipid, "%-13s" % fflabel, "%-13s" % lab]

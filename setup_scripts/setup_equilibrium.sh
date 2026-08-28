@@ -10,7 +10,7 @@ for ff in amber charmm slipids; do
 	for l in DMPC DOPC DMPG; do
 		cd ${ff}_${l}
 		for r in 1 2 3; do
-		    rm -r eq${r}
+		    rm -rf eq${r}
 		    mkdir eq${r}
 	       	    cd eq${r}
 		    cp ../step6.6_equilibration.cpt .

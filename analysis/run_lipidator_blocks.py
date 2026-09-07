@@ -71,7 +71,10 @@ def load_t0():
     stats = json.loads(STATS_JSON.read_text())["per_replicate"]
     out = {}
     for sysname, recs in stats.get("tilt", {}).items():
-        ff, lipid = sysname.rsplit("_", 1)
+        # Split from the left -- the force field is one token, the lipid label
+        # may carry a condition suffix (DMPG_JC).  rsplit would key this as
+        # ("charmm_DMPG", "JC") and quietly fall back to the whole run.
+        ff, lipid = sysname.split("_", 1)
         for r in recs:
             out[(ff, lipid, str(r["rep"]))] = int(r["t0"])
     return out
@@ -209,7 +212,10 @@ def main():
               % (TILT_JSON.name, args.default_g))
 
     tmp_root = Path(tempfile.gettempdir())
-    results = {}
+    # Merge into any existing file, so a subset run does not drop the rest.
+    blocks_json = DATA / "lipidator_blocks.json"
+    results = (json.loads(blocks_json.read_text())
+               if blocks_json.exists() else {})
     for ff in args.forcefields:
         for lipid in args.lipids:
             for rep in args.reps:
@@ -218,7 +224,7 @@ def main():
                 if res:
                     results["%s_%s_%s" % (ff, lipid, rep)] = res
 
-    out = DATA / "lipidator_blocks.json"
+    out = blocks_json
     out.write_text(json.dumps(results, indent=2, sort_keys=True))
     print("\nwrote %s (%d systems)" % (out, len(results)))
 

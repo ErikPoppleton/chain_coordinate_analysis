@@ -151,16 +151,34 @@ Pull down, for the local branches (B, C, D and the index builders below):
 
 The `.gro` files are not optional: MDAnalysis 2.10 cannot read the GROMACS 2026 `.tpr` format.
 
+**AMBER `.gro` files need their lipid residues renumbered.** GROMACS numbers
+every Lipid17 residue `1`, so MDAnalysis merges each lipid's sn-2 tail with the
+next lipid's sn-1 (257 residues instead of 384) and `make_lipidator_index` /
+`tilt_convert` refuse with "lipid residues not a multiple of 3". Run this on
+every freshly downloaded AMBER topology — it is idempotent, and a no-op on a
+file that is already numbered:
+
+```bash
+python analysis/renumber_gro.py --check traj/amber_*.gro   # report first
+python analysis/renumber_gro.py traj/amber_*.gro           # rewrite in place
+```
+
 #### 0c — build the index files  *(local; the `.ndx` are used cluster-side)*
 
 Three `.ndx` builders turn the downloaded `.gro` files into the atom selections
 the cluster-side analyses need. They must run **before** Branches A and B:
 
 ```bash
-python analysis/make_density_index.py    # traj/{ff}_{lipid}.gro -> data/density_{ff}_{lipid}.ndx
+python analysis/make_density_index.py    # traj/{ff}_{lipid}.gro -> data/density_{ff}_{lipid}.ndx (9 groups incl. potassium)
 python analysis/make_tail_index.py       # traj/{ff}_{lipid}.gro -> data/tail_{ff}_{lipid}.ndx
 python analysis/make_order_index.py      # traj/{ff}_{lipid}.gro -> data/order_{ff}_{lipid}.ndx
 ```
+
+Rebuilding a system with a different ion set or solvent naming is handled
+automatically — the builders detect the force field from the **lipid residue
+layout**, not the water name — but re-run them whenever a `.gro` changes, since
+the ion groups are read from it (the DMPG systems now carry potassium: CHARMM
+`POT`, AMBER/SLipids `K+`, with the `sodium` group empty and skipped).
 
 Because the tools that consume them run cluster-side, copy the finished
 `.ndx` back, one per system, into `{ff}_{lipid}/` — i.e. one level above the
@@ -207,7 +225,11 @@ for ff in charmm amber slipids; do
         for i in 1 2 3; do
             cd ${ff}_${l}/eq${i};
             echo "Membrane tails" | gmx density -f full.xtc -s md.tpr -n ../tail.ndx -center -o taildens.xvg;
-            echo "Membrane water sodium magnesium calcium phosphorus glycerol_C2 midpoint_C terminal_C" | gmx density -f full.xtc -s md.tpr -n ../density.ndx -center -ng 8 -o density.xvg;
+            if [[ $l == "DMPG" ]]; then
+                echo "terminal_C water potassium phosphorus glycerol_C2 midpoint_C terminal_C" | gmx density -f full.xtc -s md.tpr -n ../density.ndx -center -ng 6 -o density.xvg;
+            else
+                echo "terminal_C water sodium magnesium calcium phosphorus glycerol_C2 midpoint_C terminal_C" | gmx density -f full.xtc -s md.tpr -n ../density.ndx -center -ng 8 -o density.xvg;
+            fi
             cd ../../;
         done;
     done;
@@ -444,6 +466,30 @@ Output is 1358 × 1358 px on a transparent ground — 57.5 mm at 600 dpi, the
 panel size `make_figures.py` places at native scale. Re-run
 `analysis/make_figures.py`, `figures/fig02_pore_energy.py` and
 `figures/fig04_pore_occupancy.py` afterwards to pick the new renders up.
+
+### Branch E — DMPG ion-condition comparison  *(local; the SI figure)*
+
+The DMPG systems exist in two ion conditions (K⁺ Åqvist, and the original
+Na⁺ Joung–Cheetham runs analysed under the label `DMPG_JC`). The local half:
+
+```bash
+python analysis/renumber_gro.py traj/amber_DMPG_JC.gro          # AMBER only, once
+conda run -n lipid64 python analysis/make_lipidator_index.py traj/*_DMPG_JC.gro
+conda run -n lipid64 python analysis/core_thickness.py --lipids DMPG_JC
+conda run -n lipid64 python analysis/ion_binding.py --lipids DMPG DMPG_JC   # -> data/ion_binding.npz (g(r) + N(r))
+python analysis/run_lipidator.py --lipids DMPG_JC
+LIPIDS=DMPG_JC ./analysis/run_tilt.sh
+conda run -n base python analysis/stats.py --lipids DOPC DMPC DMPG DMPG_JC
+conda run -n base python analysis/stats.py --data-dir data/data_Na --lipids DMPG
+~/miniconda3/envs/openstructure/bin/python analysis/refit_tilt_t0.py
+conda run -n lipid64 python analysis/run_lipidator_blocks.py --lipids DMPG_JC
+python figures/figSI_dmpg_ions.py                               # -> plots/final/SI_dmpg_ions.*
+```
+
+The Na⁺ cluster-side properties live in `data/data_Na/` (lipprops + S_CD, keyed
+by the plain `DMPG` name — the directory is the condition marker); everything
+computed locally is keyed by the `DMPG_JC` label in the shared `data/`. Order
+matters as usual: `stats.py` before `refit_tilt_t0.py` before the κ blocks.
 
 ### 4d — Equilibrium properties vs the pore barrier
 

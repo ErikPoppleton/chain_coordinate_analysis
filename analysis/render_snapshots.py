@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lipiddefs import (FORCEFIELDS, LIPIDS, SCHEME, AMBER_HEAD, AMBER_TAIL,
-                       WATER_NAME)
+                       WATER)
 
 ROOT = Path(__file__).resolve().parent.parent
 SNAP = ROOT / "snapshots"
@@ -52,14 +52,16 @@ SETS = ["last", "close"]
 # PyMOL guesses the element from the atom name (a .gro carries no element
 # column) and gets several of these wrong, differently per force field:
 # CHARMM SOD comes out sulfur-yellow and CAL green, AMBER Na+ comes out white.
-IONS = {
-    "charmm":  [("SOD", "sodium"), ("CLA", "chlorine"),
-                ("MG", "magnesium"), ("CAL", "calcium")],
-    "amber":   [("Na+", "sodium"), ("Cl-", "chlorine"),
-                ("MG", "magnesium"), ("CA", "calcium")],
-    "slipids": [("NA", "sodium"), ("CL", "chlorine"),
-                ("MG", "magnesium"), ("CA", "calcium")],
-}
+# Every ion resname across the three force fields, with the PyMOL colour each
+# should get.  Listing them all rather than keying on the force field keeps the
+# script right when a system is rebuilt with a different ion set (the DMPG
+# systems moved to potassium, and the SLipids build came back with AMBER-style
+# names); resnames absent from a structure simply select nothing.
+IONS = [("SOD", "sodium"), ("Na+", "sodium"), ("NA", "sodium"),
+        ("POT", "potassium"), ("K+", "potassium"),
+        ("CLA", "chlorine"), ("Cl-", "chlorine"), ("CL", "chlorine"),
+        ("MG", "magnesium"),
+        ("CAL", "calcium"), ("CA", "calcium")]
 
 LIPID_COLOUR = "gray30"
 PHOSPHORUS_COLOUR = "orange"
@@ -94,8 +96,8 @@ def cylinder_line(ff, lipid):
 def selections(ff, lipid):
     """(lipid, tail, water, ions) selection strings for one system."""
     scheme = SCHEME[ff]
-    water = f"resn {WATER_NAME[ff]}"
-    ions = " or ".join(f"resn {esc(r)}" for r, _ in IONS[ff])
+    water = " or ".join(f"resn {r}" for r in sorted(WATER))
+    ions = " or ".join(f"resn {esc(r)}" for r, _ in IONS)
     if scheme == "amber":
         # Lipid17 splits each lipid into head + two identical tail residues,
         # so the tails are a residue selection.
@@ -137,7 +139,7 @@ def build_pml(ff, lipid, which, png, bg):
          "# Water and ions.",
          f"show spheres, {water}",
          f"show spheres, {ions}"]
-    for resn, colour in IONS[ff]:
+    for resn, colour in IONS:
         L.append(f"color {colour}, resn {esc(resn)}")
     L += ["",
           "# Hide the lipid tails so the pore is visible through the membrane.",

@@ -81,7 +81,7 @@ import numpy as np
 # Chain lengths (TAIL_NC), double-bond positions and the force-field residue
 # vocabulary come from lipiddefs; re-exported because lipid_properties.py reads
 # TAIL_NC off this module.
-from lipiddefs import (FORCEFIELDS, TAIL_NC, DOUBLE_BOND, AMBER_HEAD,
+from lipiddefs import (CHARMM_IONS, WATER, FORCEFIELDS, TAIL_NC, DOUBLE_BOND, AMBER_HEAD,
                        AMBER_TAIL, PHOSPHATE_NAMES, n_unsat)
 
 # Index files all live in the repo's data/ directory (matching make_density_index
@@ -137,12 +137,20 @@ def detect(atoms):
     full-system ``traj/{ff}_{lipid}.gro`` does; it is ``None`` for a
     waters-stripped lipid-only structure, where CHARMM and SLipids look alike."""
     resn = {a[1] for a in atoms}
-    if resn & {"TIP3"}:
+    # AMBER is identified by its lipid residue layout, never by the water name:
+    # the rebuilt SLipids DMPG carries AMBER-style TP3 water, and the old
+    # "TP3 implies AMBER" test made it look like a Lipid17 system with no
+    # OL/MY residues ("no DMPG lipids found").  See make_density_index.detect.
+    if resn & {"OL", "MY", "PC", "PGR"}:
+        det_ff = "amber"
+    elif resn & {"TIP3"}:
         det_ff = "charmm"
     elif resn & {"SOL"}:
         det_ff = "slipids"
-    elif resn & {"OL", "MY", "TP3"}:
-        det_ff = "amber"
+    elif resn & CHARMM_IONS:
+        det_ff = "charmm"
+    elif resn & WATER:
+        det_ff = "slipids"
     else:
         det_ff = None
     if resn & {"OL", "MY"}:

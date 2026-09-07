@@ -27,15 +27,22 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import make_density_index as mdi
-from lipiddefs import FORCEFIELDS, LIPIDS
+from lipiddefs import FORCEFIELDS, LIPIDS, base_lipid
 
 ROOT = Path(__file__).resolve().parent.parent
 TRAJ = ROOT / "traj"
 DATA = ROOT / "data"
 
 
-def first_atoms(gro):
-    """Return (ff, lipid, list of 1-based global first-atom indices per lipid)."""
+def first_atoms(gro, label=None):
+    """Return (ff, lipid, list of 1-based global first-atom indices per lipid).
+
+    ``label`` overrides the detected lipid name for the *output filename* only
+    (e.g. ``DMPG_JC`` for the Na+/JC ion condition, whose residues are still
+    plain ``DMPG``); the index group inside keeps the base lipid name, because
+    ReSiS matches that group against a director block in the shipped
+    ``{ff}.ldx`` library.
+    """
     u = mda.Universe(str(gro))
     ff, scheme, lipid = mdi.detect(u.atoms.resnames)
     if scheme == "amber":
@@ -49,13 +56,14 @@ def first_atoms(gro):
     else:
         res = u.select_atoms("resname %s" % lipid).residues
         firsts = [r.atoms.indices[0] + 1 for r in res]
-    return ff, lipid, firsts
+    return ff, (label or lipid), firsts
 
 
 def write_ndx(ff, lipid, firsts):
     out = DATA / ("lipidator_%s_%s.ndx" % (ff, lipid))
     with open(out, "w") as f:
-        f.write("[ %s ]\n" % lipid)
+        # Group name = base lipid: ReSiS looks it up in the director library.
+        f.write("[ %s ]\n" % base_lipid(lipid))
         for i in range(0, len(firsts), 15):
             f.write(" ".join(str(x) for x in firsts[i:i + 15]) + "\n")
     print("wrote %s  ([ %s ], %d lipids, first index %d)"
@@ -71,7 +79,13 @@ def main():
         if not gro.exists():
             print("skip %s: not found" % gro)
             continue
-        ff, lipid, firsts = first_atoms(gro)
+        # The filename already carries the label ({ff}_{label}.gro), which is
+        # what distinguishes an ion condition (DMPG_JC) from the base system.
+        stem = gro.stem
+        label = (stem.split("_", 1)[1]
+                 if stem.split("_", 1)[0] in FORCEFIELDS and "_" in stem
+                 else None)
+        ff, lipid, firsts = first_atoms(gro, label)
         write_ndx(ff, lipid, firsts)
 
 

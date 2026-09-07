@@ -47,7 +47,8 @@ from MDAnalysis.selections.gromacs import SelectionWriter
 
 # Force-field vocabulary lives in lipiddefs; re-exported here because the other
 # index builders import it from this module.
-from lipiddefs import (SCHEME, WATER, SODIUM, MAGNESIUM, CALCIUM,
+from lipiddefs import (SCHEME, WATER, SODIUM, POTASSIUM, MAGNESIUM, CALCIUM,
+                       CHARMM_IONS,
                        PHOSPHATE_NAMES as PHOSPHATE,
                        TAIL_NC, AMBER_HEAD, AMBER_TAIL,
                        chain_atom_names, lipid_resnames, midpoint_carbon)
@@ -58,15 +59,26 @@ DATA = ROOT / "data"
 
 
 def detect(resnames):
-    """Infer (ff, scheme, lipid) from the residue names present.  Water resnames
-    distinguish CHARMM (TIP3) from SLipids (SOL); AMBER shows OL/MY/TP3."""
+    """Infer (ff, scheme, lipid) from the residue names present.
+
+    AMBER is identified by its *lipid residue layout* (Lipid17 splits each lipid
+    into head PC/PGR + tails OL/MY); CHARMM and SLipids each keep the whole
+    lipid in one residue, so they are told apart by the solvent.  Water alone is
+    no longer enough: the rebuilt DMPG systems gave SLipids AMBER-style solvent
+    naming (TP3 water, ``K+``/``Cl-``), which under the old "TP3 implies AMBER"
+    test silently mis-detected ``slipids_DMPG`` as ``amber_DMPC``.  The
+    CHARMM-only ion names (SOD/POT/CLA/CAL) are the fallback tiebreak."""
     resn = set(resnames)
-    if resn & {"OL", "MY"} or "TP3" in resn:
+    if resn & {"OL", "MY", "PC", "PGR"}:
         ff = "amber"
         lipid = "DOPC" if "OL" in resn else ("DMPG" if "PGR" in resn else "DMPC")
     elif "TIP3" in resn:
         ff = "charmm"
     elif "SOL" in resn:
+        ff = "slipids"
+    elif resn & CHARMM_IONS:
+        ff = "charmm"
+    elif resn & WATER:
         ff = "slipids"
     else:
         sys.exit(f"cannot detect force field from resnames {sorted(resn)}")
@@ -95,6 +107,7 @@ def build_groups(u, scheme, lipid):
     groups = [
         ("water", by_resname(WATER)),
         ("sodium", by_resname(SODIUM)),
+        ("potassium", by_resname(POTASSIUM)),
         ("magnesium", by_resname(MAGNESIUM)),
         ("calcium", by_resname(CALCIUM)),
         ("phosphorus", by_atomname(PHOSPHATE)),

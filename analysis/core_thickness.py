@@ -172,7 +172,15 @@ def main():
                   f"({len(widths)} reps, last {LAST_NS:.0f} ns)")
     if not out:
         raise SystemExit("no trajectories found under traj/")
-    np.savez(DATA / "core_thickness.npz", **out)
+    # Merge into any existing file (as box_z.py does): a subset run
+    # (--lipids/--forcefields/--reps) must not drop the systems it skipped.
+    path = DATA / "core_thickness.npz"
+    if path.exists():
+        with np.load(path) as old_npz:
+            merged = {k: old_npz[k] for k in old_npz.files}
+        merged.update(out)
+        out = merged
+    np.savez(path, **out)
     print(f"\nwrote {DATA / 'core_thickness.npz'}")
 
 

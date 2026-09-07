@@ -31,6 +31,35 @@ FF_LABELLED = [(ff, FF_LABELS[ff]) for ff in FORCEFIELDS]
 LIPIDS = ["DOPC", "DMPC", "DMPG"]
 REPS = [1, 2, 3]
 
+
+def base_lipid(label):
+    """Strip a condition suffix from a lipid label: ``DMPG_JC`` -> ``DMPG``.
+
+    A *condition* is a variant of the same lipid run under different
+    conditions -- the DMPG ion comparison downloads its Na+/Joung-Cheetham
+    trajectories as ``traj/{ff}_DMPG_JC{rep}.xtc``, so the label carries the
+    condition while the residue names in the file are still plain ``DMPG``.
+    Labels keep the two apart in filenames and npz/json keys; the chemistry
+    (tail length, residue names, double bonds) comes from the base lipid.
+    """
+    if label in LIPIDS:
+        return label
+    if "_" in label:
+        head = label.rsplit("_", 1)[0]
+        if head in LIPIDS:
+            return head
+    return label
+
+
+class _ByLipid(dict):
+    """Lipid-keyed dict that also accepts a condition-suffixed label."""
+
+    def __missing__(self, key):
+        base = base_lipid(key)
+        if base != key and dict.__contains__(self, base):
+            return dict.__getitem__(self, base)
+        raise KeyError(key)
+
 # Residue layout per force field (see the module docstring).
 SCHEME = {"charmm": "single", "amber": "amber", "slipids": "single"}
 
@@ -38,7 +67,7 @@ SCHEME = {"charmm": "single", "amber": "amber", "slipids": "single"}
 
 # Carbons per acyl chain, counting the carbonyl as C1 (so a 14:0 tail is
 # C1..C14).  DOPC is di-oleoyl (18:1), DMPC/DMPG are di-myristoyl (14:0).
-TAIL_NC = {"DOPC": 18, "DMPC": 14, "DMPG": 14}
+TAIL_NC = _ByLipid({"DOPC": 18, "DMPC": 14, "DMPG": 14})
 TERM = TAIL_NC          # alias: "last acyl carbon" reads better in tilt code
 
 # cis double-bond position: carbons (d, d+1) are the two sp2 carbons.  Oleoyl is
@@ -51,21 +80,35 @@ CHAIN_MID = 7
 # --- residue / atom vocabulary --------------------------------------------
 
 # AMBER (Lipid17) residue names: one head + two identical tail residues.
-AMBER_HEAD = {"DOPC": "PC", "DMPC": "PC", "DMPG": "PGR"}
-AMBER_TAIL = {"DOPC": "OL", "DMPC": "MY", "DMPG": "MY"}
+AMBER_HEAD = _ByLipid({"DOPC": "PC", "DMPC": "PC", "DMPG": "PGR"})
+AMBER_TAIL = _ByLipid({"DOPC": "OL", "DMPC": "MY", "DMPG": "MY"})
 
 # One phosphorus per lipid: CHARMM/SLipids "P", AMBER (Lipid17) "P31".
 PHOSPHATE_NAMES = set(["P", "P31"])
 PHOSPHATE_SEL = "name P P31"        # the MDAnalysis/lipyphilic form
 
-# Solvent and ions.  The water resname also pins the force field (see
-# ``make_density_index.detect``).
+# Solvent and ions.
 WATER = set(["TIP3", "TP3", "SOL"])
+# The *usual* water resname per force field.  NOT a reliable force-field test
+# and not reliable per system: the DMPG systems were rebuilt with potassium
+# counterions and the SLipids build came back with AMBER-style solvent naming
+# (TP3 water, ``K+``/``Cl-`` ions) rather than SOL/NA/CL.  Select water by the
+# ``WATER`` set, and detect the force field from the *lipid* residue layout
+# (see ``make_density_index.detect``).
 WATER_NAME = {"charmm": "TIP3", "amber": "TP3", "slipids": "SOL"}
 WATER_OXYGEN = set(["O", "OW", "OH2", "OW1"])   # water O across TP3/TIP3/SOL
 SODIUM = set(["SOD", "Na+", "NA"])
+# Potassium is the DMPG counterion after the rebuild: CHARMM names it POT,
+# AMBER and SLipids both ``K+``.
+POTASSIUM = set(["POT", "K+", "K"])
+CHLORIDE = set(["CLA", "Cl-", "CL"])
 MAGNESIUM = set(["MG"])
 CALCIUM = set(["CAL", "CA"])
+# CHARMM's ion vocabulary is distinctive (SOD/POT/CLA/CAL); AMBER and SLipids
+# share the GROMACS-style names.  This is the charmm/slipids tiebreak when the
+# water resname is not diagnostic.
+CHARMM_IONS = set(["SOD", "POT", "CLA", "CAL"])
+ION_RESNAMES = SODIUM | POTASSIUM | CHLORIDE | MAGNESIUM | CALCIUM
 
 
 # --- small shared helpers --------------------------------------------------
@@ -74,7 +117,7 @@ def lipid_resnames(scheme, lipid):
     """Set of residue names making up one lipid under ``scheme``."""
     if scheme == "amber":
         return set([AMBER_HEAD[lipid], AMBER_TAIL[lipid]])
-    return set([lipid])
+    return set([base_lipid(lipid)])
 
 
 def chain_atom_names(scheme, position):

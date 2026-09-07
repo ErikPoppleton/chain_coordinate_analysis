@@ -125,22 +125,29 @@ def _bracket(ax, x1, x2, y, height, label, fontsize):
             fontsize=fontsize, clip_on=False)
 
 
-def sig_brackets(ax, cis, tops, show_ns=True, star_pt=6.0, verbose=False):
+def sig_brackets(ax, cis, tops, show_ns=True, star_pt=6.0, verbose=False,
+                 groups=None):
     """Stack pairwise significance brackets over each group of a grouped plot.
 
-    ``cis`` is ``{lipid: [ci per force field]}`` and ``tops`` ``{lipid: y of the
+    ``cis`` is ``{group: [ci per force field]}`` and ``tops`` ``{group: y of the
     tallest artist in that group}``.  Every group's ladder starts at the same
     height (the tallest artist in the panel), so the brackets read as one row.
+
+    ``groups`` is the categorical x order, defaulting to the lipids.  It has to
+    be passed for a panel whose groups are something else (the ion-condition SI
+    figure) -- the x position of a bracket is the group's index in this list, so
+    keys missing from it are silently not drawn.
     """
+    groups = LIPIDS if groups is None else groups
     lo, hi = ax.get_ylim()
     span = hi - lo
     step = 0.075 * span
     base = max(tops.values()) + 0.06 * span
     highest = base
-    for lipid in LIPIDS:
+    for lipid in groups:
         if lipid not in cis:
             continue
-        li = LIPIDS.index(lipid)
+        li = groups.index(lipid)
         level = 0
         for (i, j), cmp in pairwise(cis[lipid]):
             if cmp is None:

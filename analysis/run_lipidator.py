@@ -16,6 +16,7 @@ kappa[k_BT/nm^2] = chi[k_BT/rad^2]/A_lipid).  Requires only the stdlib.
     python3 analysis/run_lipidator.py
 """
 
+import argparse
 import json
 import re
 import subprocess
@@ -58,17 +59,27 @@ def run_one(ff, lipid, rep):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--forcefields", nargs="+", default=FORCEFIELDS)
+    ap.add_argument("--lipids", nargs="+", default=LIPIDS)
+    ap.add_argument("--reps", nargs="+", type=int, default=REPS)
+    args = ap.parse_args()
+
     if not RESIS.exists():
         raise SystemExit("resis binary not found at %s" % RESIS)
     DATA.mkdir(parents=True, exist_ok=True)
-    results = {}
-    for ff in FORCEFIELDS:
-        for lipid in LIPIDS:
-            for rep in REPS:
+    # Merge into any existing file: a subset run (e.g. one lipid re-run after a
+    # rebuild) must not drop the systems it skipped.  The summary below is then
+    # recomputed from the merged set, so it always covers all 9 systems.
+    moduli = DATA / "lipidator_moduli.json"
+    results = json.loads(moduli.read_text()) if moduli.exists() else {}
+    for ff in args.forcefields:
+        for lipid in args.lipids:
+            for rep in args.reps:
                 res = run_one(ff, lipid, rep)
                 if res:
                     results["%s_%s_%d" % (ff, lipid, rep)] = res
-    with open(DATA / "lipidator_moduli.json", "w") as fh:
+    with open(moduli, "w") as fh:
         json.dump(results, fh, indent=2, sort_keys=True)
 
     # aggregate mean +/- SD across replicates (project convention)

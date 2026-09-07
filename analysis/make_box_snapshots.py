@@ -27,7 +27,7 @@ from pathlib import Path
 
 import MDAnalysis as mda
 
-from lipiddefs import WATER, SODIUM, CALCIUM, MAGNESIUM
+from lipiddefs import WATER, ION_RESNAMES
 
 ROOT = Path(__file__).resolve().parent.parent
 TRAJ = ROOT / "traj"
@@ -35,7 +35,7 @@ SNAP = ROOT / "snapshots"
 
 PX_H = 1181              # 50 mm at 600 dpi -- the SI figure's panel height
 BUFFER_A = 8.0           # zoom padding (A) -- keeps whole molecules in frame
-SOLVENT = sorted(set(WATER) | set(SODIUM) | set(CALCIUM) | set(MAGNESIUM))
+SOLVENT = sorted(set(WATER) | set(ION_RESNAMES))
 
 
 def esc(resn):

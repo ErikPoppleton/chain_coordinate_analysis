@@ -231,13 +231,16 @@ COLS = [
     ("dhc",   r"$d_{\mathrm{HC}}$", "nm",                            2),
     ("diff",  r"$D$",            r"µm$^2$\,s$^{-1}$",                 1),
     ("scd",   r"$\langle -S_{CD}\rangle$", "--",                     3),
-    ("chi",   r"$\chi$",         r"kJ\,mol$^{-1}$\,rad$^{-2}$",       1),
+    # The ost_pymodules per-lipid chi is still computed (collect() returns it,
+    # and the vs-barrier figures plot it) but is no longer tabulated: the two
+    # tilt moduli measure the same thing, so the table carries only the
+    # area-normalised Lipidator/ReSiS kappa_theta.
     ("kappa", r"$\kappa_\theta$", r"kJ\,mol$^{-1}$\,nm$^{-2}$",       1),
 ]
 GROUPS = [
     (r"lipyphilic\cite{smith2021lipyphilic}", 4),
     (r"g\_lomepro\cite{gapsys2013computational}", 1),
-    (r"tilt modulus\cite{johner2014curvature,allolio2018local}", 2),
+    (r"Lipidator\cite{allolio2018local}", 1),
 ]
 
 # Experimental reference values + citations, hardcoded from the literature (one
@@ -319,7 +322,7 @@ def build_latex(rows):
                  "spread: for the per-frame observables (APL, $d_{\\mathrm{HH}}$, "
                  "$d_{\\mathrm{HC}}$) the within-run error is the autocorrelation-limited "
                  "standard error (statistical inefficiency $g$\\cite{chodera2016simple}), "
-                 "and for the tilt moduli ($\\chi$, $\\kappa_\\theta$) it is a "
+                 "and for the tilt modulus $\\kappa_\\theta$ it is a "
                  "block-averaged SEM; for $D$ and $\\langle -S_{CD}\\rangle$ (single fitted "
                  "scalar / profile per run) it is the SD across the three replicates. "
                  "$d_{\\mathrm{HH}}$: phosphate--phosphate bilayer thickness; "
@@ -329,8 +332,8 @@ def build_latex(rows):
                  "$D$: lateral diffusion coefficient; "
                  "$\\langle -S_{CD}\\rangle$: chain-averaged "
                  "order parameter (g\\_lomepro); "
-                 "$\\chi$: per-lipid tilt modulus (OpenStructure/ost\\_pymodules); "
-                 "$\\kappa_\\theta$: area-normalised tilt modulus (Lipidator/ReSiS). "
+                 "$\\kappa_\\theta$: area-normalised lipid tilt modulus "
+                 "(Lipidator/ReSiS). "
                  "Simulations: $T=310$\\,K. Except where indicated, experimental values "
                  "are for $T= 30^{\\circ}$\\,C ($303.15$\\,K)}")
     lines.append("\\label{tab:equilibrium_properties}")

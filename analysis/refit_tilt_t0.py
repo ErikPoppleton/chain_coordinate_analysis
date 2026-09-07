@@ -64,7 +64,11 @@ def load_t0():
                          "stats.py (it reads data/tilt_series_*.npz)")
     out = {}
     for sysname, recs in stats["tilt"].items():
-        ff, lipid = sysname.rsplit("_", 1)
+        # Split from the *left*: the force field is always one token, while the
+        # lipid label may carry a condition suffix (DMPG_JC).  rsplit would
+        # read "charmm_DMPG_JC" as ff="charmm_DMPG", lipid="JC" and silently
+        # match no tilt entry.
+        ff, lipid = sysname.split("_", 1)
         for r in recs:
             out[(ff, lipid, int(r["rep"]))] = int(r["t0"])
     return out

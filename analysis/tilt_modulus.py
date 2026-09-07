@@ -93,11 +93,11 @@ import lipid_analysis  # noqa: E402
 # the decorrelation time of the per-frame tilt spread -- pymbar isn't importable
 # under the OpenStructure Python 2.7, autocorr is (validated bit-identical to it).
 import autocorr  # noqa: E402
-# WATER_NAME: the per-force-field water resname.  TERM: the last acyl carbon of
+# WATER: every water resname we might see.  TERM: the last acyl carbon of
 # each chain, per lipid -- the tail reference point is the COM of the last THREE
 # carbons of each chain (six atoms total), per Khelashvili 2013 SI Fig. S2
 # ("three terminal carbon atoms ... six cyan spheres").
-from lipiddefs import WATER_NAME, TERM  # noqa: E402
+from lipiddefs import WATER, TERM, base_lipid  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
@@ -137,7 +137,11 @@ def selections(ff, lipid):
         head = "aname=P31,C2"              # ~midpoint of phosphate + glycerol C2
         neutral = "aname=C2"
     else:
-        rname = lipid
+        # The *residue* name, so a condition-suffixed label (DMPG_JC) has to
+        # come back to its base lipid -- otherwise the lipid view selects
+        # nothing and the density map fails with "invalid handle or view".
+        # (AMBER is unaffected: tilt_convert merges its three residues to LIP.)
+        rname = base_lipid(lipid)
         head = "aname=P,C2"                # ~midpoint of phosphate + glycerol C2
         neutral = "aname=C2"
     return rname, {rname: head}, {rname: tail}, {rname: neutral}
@@ -173,11 +177,21 @@ def analyze(basis, stride=1, density_stride=10, nbins=90,
             "This OST build lacks the image (IPLT) libraries, so the water-"
             "density interface used for the membrane normals cannot be built.\n"
             "Rebuild OST with image support, or use the global-z tilt method.")
-    parts = os.path.basename(basis).split("_")    # tilt_{ff}_{lipid}[_{rep}]
-    ff, lipid = parts[1], parts[2]
-    rep = parts[3] if len(parts) > 3 else None
+    # tilt_{ff}_{lipid}[_{rep}] -- the lipid label may itself contain an
+    # underscore (a condition suffix such as DMPG_JC), so the replicate is
+    # taken as a trailing all-digits field and everything between the force
+    # field and it is the label.
+    parts = os.path.basename(basis).split("_")
+    ff = parts[1]
+    if len(parts) > 3 and parts[-1].isdigit():
+        lipid, rep = "_".join(parts[2:-1]), parts[-1]
+    else:
+        lipid, rep = "_".join(parts[2:]), None
     rname, head_d, tail_d, dist_d = selections(ff, lipid)
-    water = WATER_NAME[ff]
+    # Every known water resname, not the per-ff one: the rebuilt SLipids DMPG
+    # carries AMBER-style TP3 water, and selecting 'SOL' there would leave the
+    # density interface empty.
+    water = ",".join(sorted(WATER))
 
     eh, t = load_trajectory(basis)
     if stride > 1:

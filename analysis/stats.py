@@ -46,6 +46,7 @@ min Neff_max) and writes the full per-replicate numbers to
 ``data/equilibrium_timeseries_stats.json``.
 """
 
+import argparse
 import json
 from pathlib import Path
 
@@ -121,8 +122,12 @@ def analyze_series(A, nskip=None):
 
 # --- per-frame observable series ---------------------------------------------
 
-def series_for(npzs, ff, lipid, rep):
-    """Return {observable: 1-D per-frame series} for one (ff, lipid, rep)."""
+def series_for(npzs, ff, lipid, rep, data=DATA):
+    """Return {observable: 1-D per-frame series} for one (ff, lipid, rep).
+
+    ``data`` is the directory the *auxiliary* per-frame inputs (the OST tilt
+    series) are read from -- it must match the directory ``npzs`` came from, or
+    a second ion condition would silently borrow the other one's tilt series."""
     sys = f"{ff}_{lipid}"
     key = f"{sys}_eq{rep}"
     out = {}
@@ -143,7 +148,7 @@ def series_for(npzs, ff, lipid, rep):
         m = arr.shape[0] // (2 * F)
         if 2 * F * m == arr.shape[0]:
             out["scc"] = arr.reshape(2, F, m, nc).mean(axis=(0, 2, 3))
-    tilt = DATA / ("tilt_series_%s_%d.npz" % (sys, rep))
+    tilt = data / ("tilt_series_%s_%d.npz" % (sys, rep))
     if tilt.exists():                                  # OST per-frame tilt spread
         with np.load(tilt) as tz:
             if "theta_var" in tz.files:
@@ -193,13 +198,28 @@ def decompose(rows):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    # A second ion condition (the DMPG Na+/JC rebuild comparison) keeps its own
+    # lipprops in a sibling directory, so t0/g for it are computed by pointing
+    # this script at that directory instead of copying series around.
+    ap.add_argument("--data-dir", type=Path, default=DATA,
+                    help="directory holding the lipprops_*.npz (default: data/)")
+    ap.add_argument("--lipids", nargs="+", default=LIPIDS,
+                    help="restrict to these lipids")
+    ap.add_argument("--out", type=Path, default=None,
+                    help="output JSON (default: <data-dir>/"
+                         "equilibrium_timeseries_stats.json)")
+    args = ap.parse_args()
+    data = args.data_dir
+    lipids = args.lipids
+
     npzs = {}
     for name in ["area_per_lipid", "memb_thickness", "registration", "order_parameter"]:
-        p = DATA / f"lipprops_{name}.npz"
+        p = data / f"lipprops_{name}.npz"
         if not p.exists():
             raise SystemExit(f"missing {p}")
         npzs[name] = np.load(p)
-    ctp = DATA / "core_thickness.npz"                  # optional: adds the d_HC observable
+    ctp = data / "core_thickness.npz"                  # optional: adds the d_HC observable
     if ctp.exists():
         npzs["core_thickness"] = np.load(ctp)
     else:
@@ -208,10 +228,10 @@ def main():
     # per-replicate results: results[obs][system] = list of dicts
     results = {obs: {} for obs in OBSERVABLES}
     for ff in FORCEFIELDS:
-        for lipid in LIPIDS:
+        for lipid in lipids:
             sys = f"{ff}_{lipid}"
             for rep in REPS:
-                series = series_for(npzs, ff, lipid, rep)
+                series = series_for(npzs, ff, lipid, rep, data=data)
                 for obs, A in series.items():
                     row = analyze_series(A)
                     row["rep"] = rep
@@ -226,7 +246,7 @@ def main():
               f"{'Neff_max (mean±SD)':>20s} {'min Neff_max':>13s}")
         all_g, all_neff = [], []
         for ff in FORCEFIELDS:
-            for lipid in LIPIDS:
+            for lipid in lipids:
                 sys = f"{ff}_{lipid}"
                 rows = results[obs].get(sys)
                 if not rows:
@@ -259,7 +279,7 @@ def main():
         print(f"  {'system':16s} {'between-SD':>10s} {'within-SEM':>10s} "
               f"{'ratio':>6s} {'sigma_betw':>10s} {'~pooled n':>9s}  verdict")
         for ff in FORCEFIELDS:
-            for lipid in LIPIDS:
+            for lipid in lipids:
                 sys = f"{ff}_{lipid}"
                 rows = results[obs].get(sys)
                 if not rows:
@@ -270,7 +290,7 @@ def main():
                       f"{d['ratio']:6.2f} {d['sigma_between']:10.4g} {d['pooled_n']:9d}"
                       f"  {d['verdict']}")
 
-    out = DATA / "equilibrium_timeseries_stats.json"
+    out = args.out or (data / "equilibrium_timeseries_stats.json")
     out.write_text(json.dumps({"per_replicate": results, "decomposition": decomp},
                               indent=2, sort_keys=True))
     print(f"\nwrote {out}")

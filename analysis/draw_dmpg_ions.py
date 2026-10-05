@@ -69,6 +69,7 @@ CONDITIONS = [
 ]
 COND_KEYS = [c[0] for c in CONDITIONS]
 
+XTICK_PAD = 8.0         # pt -- baseline-anchored x tick labels (see _categorical)
 RVIEW = 6.0             # A -- x limit of the ion-coordination panel
 FIRST_SHELL = 4.5       # A -- first-shell boundary quoted in the run log
 JC_TINT = 0.42          # CMAPS position for the lighter (JC) shade
@@ -186,6 +187,15 @@ def _categorical(ax):
     ax.set_xticks(range(len(CONDITIONS)), [c[1] for c in CONDITIONS])
     ax.set_xlim(-0.5, len(CONDITIONS) - 0.5)
     figstyle.categorical_x(ax)
+    # Matplotlib top-aligns x tick labels, so a taller glyph pushes its whole
+    # label down: the ring on the Angstrom in "K+ Aq" dropped it below
+    # "Na+ JC".  Baseline alignment lines the two up on their baselines
+    # regardless of what sits above the cap height.
+    for label in ax.get_xticklabels():
+        label.set_verticalalignment("baseline")
+    # With baseline anchoring the text no longer hangs from its top edge, so
+    # the tick pad has to cover the font's descent (the "q" of Aq) itself.
+    ax.tick_params(axis="x", which="major", pad=XTICK_PAD)
 
 
 def _across_conditions(prop, cis, verbose):

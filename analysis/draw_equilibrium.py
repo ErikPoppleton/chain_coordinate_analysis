@@ -341,12 +341,17 @@ def scd_profiles(lipid):
     return out
 
 
-def draw_scd(ax, lipid="DMPG", verbose=False):
+def draw_scd(ax, lipid="DMPG", tick_step=None, verbose=False):
     """Per-carbon -S_CD profile (g_lomepro) for one lipid, force fields overlaid.
 
     Carbon number runs along **x** here (rather than down an inverted y as in
     the standalone ``plots/lipprop_scd.png``) so the panel reads like its row
     neighbours; the band is the SD across the three replicates.
+
+    ``tick_step`` labels every n-th carbon; the default adapts to the chain, so
+    the di-myristoyl lipids (C2..C13, 12 labels) get every carbon while
+    di-oleoyl DOPC (C2..C17, 16 labels) gets every second one -- 16 two-digit
+    labels at 7 pt do not fit a 52 mm panel.
     """
     profiles = scd_profiles(lipid)
     for ff, ff_label, colour in FORCEFIELDS:
@@ -367,7 +372,9 @@ def draw_scd(ax, lipid="DMPG", verbose=False):
     # along the chain, so a top scale still means something.
     if profiles:
         first = next(iter(profiles.values()))[0]
-        ax.set_xticks(np.arange(int(first[0]), int(first[-1]) + 1, dtype=int))
+        step = tick_step or (1 if len(first) <= 12 else 2)
+        ax.set_xticks(np.arange(int(first[0]), int(first[-1]) + 1, step,
+                                dtype=int))
     ax.xaxis.set_minor_locator(mticker.NullLocator())
     ax.set_title(lipid)
     return profiles

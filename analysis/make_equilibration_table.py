@@ -97,6 +97,44 @@ def traj_len_sentence(stats):
     return "; ".join(parts) + "."
 
 
+QUICK_T0_NS = 40.0      # "equilibrates quickly" threshold for the caption
+
+
+def burnin_sentence(stats):
+    """Caption sentence summarising the burn-ins and the worst-sampled series.
+
+    Computed from the JSON rather than written by hand: a hand-written version
+    ("the DMPG bilayers, especially AMBER, show long t0 ... few uncorrelated
+    samples") described the old Na+/Mg2+/Ca2+ DMPG runs and silently went stale
+    when the potassium rebuild removed that behaviour.
+    """
+    series = []          # (t0_ns, neff, ff_label, lipid) per replicate x observable
+    for lipid in LIPIDS:
+        for ff, fflabel in FORCEFIELDS:
+            for okey, _ in OBS:
+                for r in stats.get(okey, {}).get("%s_%s" % (ff, lipid), []):
+                    series.append((r["t0"] * NS_PER_FRAME, r["Neff_max"],
+                                   fflabel, lipid))
+    if not series:
+        return ""
+    quick = sum(t0 <= QUICK_T0_NS for t0, _, _, _ in series)
+    # The longest burn-in per system, for the two systems with the longest.
+    longest = {}
+    for t0, _, fflabel, lipid in series:
+        key = "%s %s" % (fflabel, lipid)
+        longest[key] = max(longest.get(key, 0.0), t0)
+    top = sorted(longest.items(), key=lambda kv: -kv[1])[:2]
+    min_neff = min(neff for _, neff, _, _ in series)
+    return ("  Most series equilibrate quickly ($t_0\\le%g$\\,ns for %d of %d "
+            "replicate--observable series); the longest burn-ins are single "
+            "replicates (%s), and every series retains "
+            "$N_\\mathrm{eff}\\ge%d$ uncorrelated samples."
+            % (QUICK_T0_NS, quick, len(series),
+               "; ".join("%s, $\\approx%.0f$\\,ns" % (k, round(v, -1))
+                         for k, v in top),
+               int(np.floor(min_neff))))
+
+
 def build_latex(stats):
     L = []
     L.append("% Requires \\usepackage{booktabs,multirow,amsmath}")
@@ -137,8 +175,7 @@ def build_latex(stats):
              "statistical inefficiency of the production span $[t_0,T]$; $N$ is "
              "the number of production frames and $N_\\mathrm{eff}=(T-t_0)/g$ the "
              "effective number of uncorrelated samples.  Frames $\\to$ ns at $0.2$\\,ns/frame.  " + traj_len_sentence(stats) +
-             "  The DMPG bilayers (especially AMBER) show long, replicate-variable "
-             "$t_0$ from slow acyl-chain ordering, leaving few uncorrelated samples.}")
+             burnin_sentence(stats) + "}")
     L.append("\\label{tab:equilibration}")
     L.append("\\end{table}")
     return "\n".join(L) + "\n"

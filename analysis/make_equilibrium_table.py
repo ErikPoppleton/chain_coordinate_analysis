@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 r"""Build a LaTeX summary table of the **equilibrium** membrane properties.
 
-Covers every equilibrium-derived observable in ``data/`` -- the lipyphilic
-bulk properties, the g_lomepro S_CD order parameter, and the two tilt-modulus
-methods (OpenStructure/ost_pymodules and the Lipidator/ReSiS toolkit).  The
-pore-formation PMFs, pore cylindrical density maps, and pore-closure
-trajectories are deliberately excluded (they are not equilibrium quantities).
+Covers the equilibrium-derived observables in ``data/`` -- the lipyphilic
+bulk properties and the Lipidator/ReSiS tilt modulus -- plus one pore column:
+the **pore-formation barrier Delta G** from the chain-coordinate PMF, exactly the
+value Figure 2 plots (``draw_pore_energy.barrier()``, basin to pore-side peak).
+The other pore branches (cylindrical density maps, closure trajectories) are
+excluded.  ``collect()`` still returns the g_lomepro ``<-S_CD>`` and the
+ost_pymodules ``chi`` (the vs-barrier figures plot them), but neither is
+tabulated any more.
 
 Error scheme (per column, by what data is available):
   * The **per-frame lipyphilic observables** (APL, d_HH, d_HC) carry a
@@ -23,6 +26,9 @@ Error scheme (per column, by what data is available):
     replicate spread the same ``max(between^2, within^2)`` way.
   * **D and <-S_CD>** keep ``mean +/- SD`` across the three replicate scalars --
     a single fitted scalar / profile per run, with no within-run error series.
+  * **Delta G** is the full 100 ns profile's barrier +/- the SD of the same
+    barrier over the five consecutive 20 ns partial profiles -- a convergence
+    spread (one PMF per system, no replicates).
 
 Inputs (all in ``data/``):
   * ``lipprops_area_per_lipid.npz``   -- APL  (per-rep key ``{ff}_{lipid}_eq{n}``, 2-D frames x lipids)
@@ -33,6 +39,7 @@ Inputs (all in ``data/``):
   * ``{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`` -- g_lomepro -S_CD (col2 = mean, col3 = SD-over-lipids)
   * ``tilt_moduli_summary.json``      -- ost_pymodules chi (kJ/mol/rad^2)
   * ``lipidator_moduli_summary.json`` -- Lipidator kappa_theta (kJ/mol/nm^2)
+  * ``{ff}_{lipid}_profile.xvg`` + ``_part{1..5}_profile.xvg`` -- gmx wham PMFs (Delta G)
 
 Writes ``data/equilibrium_summary_table.tex`` (drop-in; needs
 ``\usepackage{booktabs,multirow,amsmath}``) and prints a plain-text preview
@@ -167,6 +174,19 @@ def moduli_ci(perrep, ff, lipid, val_key, sem_key):
     return (r["mean"], r["ci_half"]) if r else None
 
 
+def pore_barrier(ff, lipid):
+    """(Delta G, SD over the five 20 ns partials) in kJ/mol, or None.
+
+    Imported lazily: ``draw_pore_energy`` itself imports this module (for
+    ``collect()``), so a top-level import would be circular."""
+    import draw_pore_energy as dpe
+    full = dpe.barrier(ff, lipid)
+    if full is None:
+        return None
+    parts = dpe.partial_barriers(ff, lipid)
+    return (full, float(np.std(parts, ddof=1)) if len(parts) > 1 else float("nan"))
+
+
 def load():
     need = ["lipprops_area_per_lipid.npz", "lipprops_memb_thickness.npz",
             "lipprops_lateral_diffusion.npz", "tilt_moduli.json"]
@@ -217,6 +237,8 @@ def collect():
             # --- tilt moduli: hierarchical CI from per-rep value + block SEM ---
             cell["chi"] = moduli_ci(tiltrep, ff, lipid, "chi_kT", "chi_block_sem")
             cell["kappa"] = moduli_ci(lipblk, ff, lipid, "kappa_full", "kappa_block_sem")
+            # --- pore-formation barrier (Figure 2's value) +/- partial spread ---
+            cell["dg"] = pore_barrier(ff, lipid)
             rows[(ff, lipid)] = cell
             for p, v in cell.items():
                 if v is None:
@@ -230,18 +252,32 @@ COLS = [
     ("thick", r"$d_{\mathrm{HH}}$", "nm",                            2),
     ("dhc",   r"$d_{\mathrm{HC}}$", "nm",                            2),
     ("diff",  r"$D$",            r"µm$^2$\,s$^{-1}$",                 1),
-    ("scd",   r"$\langle -S_{CD}\rangle$", "--",                     3),
+    # The g_lomepro <-S_CD> is still computed (collect() returns it, and
+    # plot_property_vs_barrier.py plots it) but is no longer tabulated.
     # The ost_pymodules per-lipid chi is still computed (collect() returns it,
     # and the vs-barrier figures plot it) but is no longer tabulated: the two
     # tilt moduli measure the same thing, so the table carries only the
     # area-normalised Lipidator/ReSiS kappa_theta.
     ("kappa", r"$\kappa_\theta$", r"kJ\,mol$^{-1}$\,nm$^{-2}$",       1),
+    ("dg",    r"$\Delta G_{\mathrm{pore}}$", r"kJ\,mol$^{-1}$",           1),
 ]
 GROUPS = [
     (r"lipyphilic\cite{smith2021lipyphilic}", 4),
-    (r"g\_lomepro\cite{gapsys2013computational}", 1),
     (r"Lipidator\cite{allolio2018local}", 1),
+    (r"gmx wham\cite{hub2010gwham}", 1),
 ]
+
+# Nagle 2017 (Table 1, X-ray diffuse scattering, T = 30 C) reports K_theta in
+# mN/m; the table's kappa_theta is in kJ/mol/nm^2.  1 mN/m = 1e-21 J/nm^2, so
+# x N_A -> 0.6022 kJ/mol/nm^2.  No monolayer/bilayer factor is applied: Nagle
+# compares a Khelashvili-Harries real-space simulation value (the method family
+# Lipidator implements) directly against the X-ray one.
+MN_PER_M_TO_KJ_MOL_NM2 = 0.60221
+
+
+def _nagle_kappa(k_mn, err_mn):
+    return r"$%.1f \pm %.1f$\cite{nagle2017experimentally}" % (
+        k_mn * MN_PER_M_TO_KJ_MOL_NM2, err_mn * MN_PER_M_TO_KJ_MOL_NM2)
 
 # Experimental reference values + citations, hardcoded from the literature (one
 # extra "Exp" row per lipid).  Keyed by COLS column key; a missing key -> blank
@@ -252,12 +288,14 @@ EXPERIMENTAL = {
         "thick": r"$3.69$\cite{nagle2000structure}",
         "dhc":   r"$2.71$\cite{nagle2000structure}",
         "diff":  r"$\approx12$ ($308$\,K)\cite{filippov2003effect}",
+        "kappa": _nagle_kappa(89, 4),          # 89 +/- 4 mN/m
     },
     "DMPC": {
         "apl":   r"$59.6$\cite{nagle2000structure}",
         "thick": r"$3.60$\cite{nagle2000structure,schuy2006thermal}",
         "dhc":   r"$2.62$\cite{nagle2000structure}",
         "diff":  r"$\approx11$ ($308$\,K)\cite{filippov2003effect}",
+        "kappa": _nagle_kappa(44, 2),          # 44 +/- 2 mN/m
     },
     "DMPG": {
         "apl":   r"$65.1$\cite{pan2012molecular}",
@@ -323,17 +361,19 @@ def build_latex(rows):
                  "$d_{\\mathrm{HC}}$) the within-run error is the autocorrelation-limited "
                  "standard error (statistical inefficiency $g$\\cite{chodera2016simple}), "
                  "and for the tilt modulus $\\kappa_\\theta$ it is a "
-                 "block-averaged SEM; for $D$ and $\\langle -S_{CD}\\rangle$ (single fitted "
-                 "scalar / profile per run) it is the SD across the three replicates. "
+                 "block-averaged SEM; for $D$ (a single fitted scalar per run) it is "
+                 "the SD across the three replicates. "
                  "$d_{\\mathrm{HH}}$: phosphate--phosphate bilayer thickness; "
                  "$d_{\\mathrm{HC}}$: hydrophobic-core thickness (first-tail-carbon "
                  "MembThickness; agrees with the tail mass-density width at "
                  "$500$\\,kg\\,m$^{-3}$ to $\\sim0.02$\\,nm); "
                  "$D$: lateral diffusion coefficient; "
-                 "$\\langle -S_{CD}\\rangle$: chain-averaged "
-                 "order parameter (g\\_lomepro); "
                  "$\\kappa_\\theta$: area-normalised lipid tilt modulus "
-                 "(Lipidator/ReSiS). "
+                 "(Lipidator/ReSiS; experimental values converted from mN\\,m$^{-1}$); "
+                 "$\\Delta G_{\\mathrm{pore}}$: pore-formation barrier, from the "
+                 "chain-coordinate PMF basin to the highest point on its pore side "
+                 "(one $100$\\,ns umbrella-sampling PMF per system; $\\pm$ is the SD of the "
+                 "same barrier over five consecutive $20$\\,ns sub-windows). "
                  "Simulations: $T=310$\\,K. Except where indicated, experimental values "
                  "are for $T= 30^{\\circ}$\\,C ($303.15$\\,K)}")
     lines.append("\\label{tab:equilibrium_properties}")

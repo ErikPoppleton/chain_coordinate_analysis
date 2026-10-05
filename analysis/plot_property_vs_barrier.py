@@ -58,13 +58,9 @@ def load_xvg(path):
     return np.array(x), np.array(y)
 
 
-def barrier(ff, lipid):
-    """Pore-nucleation barrier = max(PMF) - min(PMF) from the full profile."""
-    path = DATA / f"{ff}_{lipid}_profile.xvg"
-    if not path.exists():
-        return None
-    _, y = load_xvg(path)
-    return float(y.max() - y.min())
+# barrier() lives in draw_pore_energy -- one definition, since it is subtler
+# than it looks (the xi->0 edge can out-top the pore peak; see its docstring).
+from draw_pore_energy import barrier  # noqa: E402
 
 
 def main():

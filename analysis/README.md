@@ -444,6 +444,8 @@ The rendered pore images used by `make_figures.py`, Figure 2d and Figure 4g–i
 are produced from the configurations in `snapshots/`:
 
 ```bash
+# if a pore sits within ~1 nm of a box face, recentre it across PBC first
+conda run -n lipid64 python analysis/center_pore_gro.py     # -> *_centred.gro + *_cyl_centred.pml
 python analysis/render_snapshots.py     # -> snapshots/{ff}_{lipid}_{last,close}.png (18 panels, ~16 s)
 python analysis/render_snapshots.py --ff charmm --lipid DMPC --set last   # a subset
 python analysis/render_snapshots.py --dry-run                            # write the .pml only
@@ -484,6 +486,8 @@ conda run -n base python analysis/stats.py --data-dir data/data_Na --lipids DMPG
 ~/miniconda3/envs/openstructure/bin/python analysis/refit_tilt_t0.py
 conda run -n lipid64 python analysis/run_lipidator_blocks.py --lipids DMPG_JC
 python figures/figSI_dmpg_ions.py                               # -> plots/final/SI_dmpg_ions.*
+python analysis/render_snapshots.py --ff amber --lipid DMPG_Na --set last   # the Na+ pore snapshot
+python figures/figSI_dmpg_pmf_ions.py                           # -> plots/final/SI_dmpg_pmf_ions.*
 ```
 
 The Na⁺ cluster-side properties live in `data/data_Na/` (lipprops + S_CD, keyed

@@ -70,7 +70,7 @@ def plot_counts(panels, suffix, title, out_stem):
 
     fig = plt.figure(figsize=(11, 8))
     outer = GridSpec(len(ROWS), len(LIPIDS), figure=fig, left=0.07, right=0.985,
-                     top=0.87, bottom=0.08, wspace=0.34, hspace=0.18)
+                     top=0.895, bottom=0.08, wspace=0.34, hspace=0.18)
     xticks = np.arange(50, tmax + 1, 50)   # keep the 200 ns endpoint, drop 0;
     handles, labels = [], []               # the histogram's 0.00 tick is pruned
 
@@ -117,8 +117,8 @@ def plot_counts(panels, suffix, title, out_stem):
                     handles.append(line)
                     labels.append(ff_label)
 
-    fig.suptitle(title, y=0.99)
-    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.955),
+    fig.suptitle(title, y=0.985)
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.965),
                frameon=False, ncol=3)
     out = PLOTS / f"{out_stem}.png"
     fig.savefig(out, dpi=300)

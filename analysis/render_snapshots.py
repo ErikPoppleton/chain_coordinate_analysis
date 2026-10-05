@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lipiddefs import (FORCEFIELDS, LIPIDS, SCHEME, AMBER_HEAD, AMBER_TAIL,
-                       WATER)
+                       WATER, base_lipid)
 
 ROOT = Path(__file__).resolve().parent.parent
 SNAP = ROOT / "snapshots"
@@ -78,18 +78,40 @@ def gro_path(ff, lipid, which):
     Raw Lipid17 gros number every residue 1, which PyMOL reads as one giant
     residue; the ``*_renumbered.gro`` copies fix that where they were made."""
     stem = f"{ff}_{lipid}_" + ("last_conf" if which == "last" else "close")
-    renumbered = SNAP / f"{stem}_renumbered.gro"
-    return renumbered if renumbered.exists() else SNAP / f"{stem}.gro"
+    raw = SNAP / f"{stem}.gro"
+    # Preference order: a PBC-recentred copy (center_pore_gro.py, for a pore
+    # that sat on a box face), then a residue-renumbered one, then the raw file.
+    # A variant OLDER than the raw file is ignored: these are derived copies, so
+    # a re-downloaded configuration leaves them stale, and silently rendering
+    # the old one is the worst outcome (it looks like a successful re-render).
+    for suffix in ("_centred", "_renumbered"):
+        path = SNAP / f"{stem}{suffix}.gro"
+        if not path.exists():
+            continue
+        if raw.exists() and path.stat().st_mtime < raw.stat().st_mtime:
+            print(f"  ! ignoring {path.name}: older than {raw.name} "
+                  f"(stale derived copy -- re-run center_pore_gro.py / "
+                  f"renumber_gro.py if you still need it)")
+            continue
+        return path
+    return raw
 
 
 def cylinder_line(ff, lipid):
-    """The ``cyl x,y,z0,z1,u=nm`` line from the committed cyl_style.pml."""
-    pml = SNAP / f"{ff}_{lipid}_cyl_style.pml"
-    if not pml.exists():
-        return None
-    for line in pml.read_text().splitlines():
-        if line.startswith("cyl "):
-            return line.strip()
+    """The ``cyl x,y,z0,z1,u=nm`` line for this system, or None.
+
+    A ``*_cyl_centred.pml`` from ``center_pore_gro.py`` wins over the committed
+    ``*_cyl_style.pml``: when the pore has been recentred across PBC (because it
+    sat on a box face) the cylinder has to move with it.  The committed file
+    stays the untouched record of the run's real geometry.
+    """
+    for name in (f"{ff}_{lipid}_cyl_centred.pml", f"{ff}_{lipid}_cyl_style.pml"):
+        pml = SNAP / name
+        if not pml.exists():
+            continue
+        for line in pml.read_text().splitlines():
+            if line.startswith("cyl "):
+                return line.strip()
     return None
 
 
@@ -108,8 +130,11 @@ def selections(ff, lipid):
         # chains have to be picked out by name: the C2*/C3* carbons minus the
         # glycerol backbone (C2, C3) and the ester carbonyls (C21, C31) --
         # which live in AMBER's *head* residue and so stay visible there too.
-        lipids = f"resn {lipid}"
-        tail = (f"resn {lipid} and name C2*+C3* "
+        # The residue name is the *base* lipid: a condition label such as
+        # DMPG_Na would select nothing (the same trap tilt_modulus hit).
+        resn = base_lipid(lipid)
+        lipids = f"resn {resn}"
+        tail = (f"resn {resn} and name C2*+C3* "
                 f"and not name C2+C3+C21+C31")
     return lipids, tail, water, ions
 
@@ -196,10 +221,23 @@ def build_pml(ff, lipid, which, png, bg):
     return "\n".join(L) + "\n"
 
 
+def _lipid_label(value):
+    """argparse type: a lipid name, optionally with a condition suffix."""
+    if base_lipid(value) not in LIPIDS:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a lipid or a suffixed condition label "
+            f"(base must be one of {', '.join(LIPIDS)})")
+    return value
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ff", nargs="*", default=FORCEFIELDS, choices=FORCEFIELDS)
-    ap.add_argument("--lipid", nargs="*", default=LIPIDS, choices=LIPIDS)
+    # No `choices`: a lipid may carry a condition suffix (DMPG_Na, DMPG_JC),
+    # which base_lipid resolves for the selections while the label keeps the
+    # filenames apart.  Validated against base_lipid instead, so a genuine typo
+    # still fails fast.
+    ap.add_argument("--lipid", nargs="*", default=LIPIDS, type=_lipid_label)
     ap.add_argument("--set", nargs="*", dest="sets", default=SETS, choices=SETS)
     ap.add_argument("--bg", default=None,
                     help="PyMOL background colour "

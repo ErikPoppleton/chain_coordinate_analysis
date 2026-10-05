@@ -65,31 +65,83 @@ def load_xvg(path):
     return np.array(x), np.array(y)
 
 
-def barrier(ff, lipid):
-    """Pore-nucleation barrier: max(PMF) - min(PMF) of the full profile."""
-    path = DATA / f"{ff}_{lipid}_profile.xvg"
+def barrier(ff, lipid, data=None, verbose=False):
+    """Pore-nucleation barrier: the climb from the PMF basin to the pore-side top.
+
+    **Not** ``max - min`` of the whole profile, which is what this used to be.
+    The chain coordinate penalises the xi -> 0 limit (every slice must be
+    lipid-filled there), so each profile *rises* toward the left edge, and the
+    metastable intact-membrane state is the interior basin (argmin, at
+    xi = 0.07-0.44 here, moving right as the membrane softens) -- not xi = 0.
+    The barrier is therefore the highest point **on the pore side of that
+    basin**, measured from it.
+
+    For eight of the nine systems the two definitions coincide, because the
+    pore peak is also the global max; they diverge exactly when the left edge
+    out-tops the pore peak, which **SLipids DMPG does** (edge 59.1 vs peak
+    27.7 kJ/mol). `max - min` then silently reports the edge height as a
+    barrier -- the disagreement that showed up between Figure 2's PMF panels
+    and its barrier scatters. That case is warned about rather than trusted.
+    """
+    path = (data or DATA) / f"{ff}_{lipid}_profile.xvg"
     if not path.exists():
         return None
     _, y = load_xvg(path)
-    return float(y.max() - y.min())
+    y = y - y.min()
+    basin = int(np.argmin(y))
+    pore_peak = float(y[basin:].max())
+    if y[0] > pore_peak:
+        print(f"  ! {ff}_{lipid}: the xi->0 edge ({y[0]:.1f}) out-tops the pore "
+              f"peak ({pore_peak:.1f} kJ/mol); reporting the pore barrier, not "
+              f"max-min")
+    if verbose:
+        print(f"  {lipid:5s} {ff:8s} basin at index {basin}, pore barrier = "
+              f"{pore_peak:.1f} kJ/mol (max-min = {y.max():.1f})")
+    return pore_peak
 
 
-def draw_pmf(ax, lipid, partials=True, verbose=False):
+def partial_barriers(ff, lipid, data=None):
+    """The same pore barrier from each of the five 20 ns partial profiles.
+
+    Same basin-to-pore-side-peak definition as :func:`barrier`, applied to
+    ``{ff}_{lipid}_part{1..5}_profile.xvg`` -- the faint curves behind each PMF
+    in Figure 2.  Their spread is a convergence check on the full-profile
+    barrier (the equilibrium table quotes it as the +/- SD); the first window
+    runs systematically high (burn-in).  Returns an array, missing parts skipped.
+    """
+    out = []
+    for part in range(1, N_PARTS + 1):
+        path = (data or DATA) / f"{ff}_{lipid}_part{part}_profile.xvg"
+        if not path.exists():
+            continue
+        _, y = load_xvg(path)
+        y = y - y.min()
+        out.append(float(y[int(np.argmin(y)):].max()))
+    return np.asarray(out)
+
+
+def draw_pmf(ax, lipid, partials=True, data=None, title=None, verbose=False):
     """Min-zeroed PMF profiles for one lipid, force fields overlaid.
 
     Each full curve is shifted so its own minimum is zero; the five 20 ns
     partial profiles are drawn faintly behind it as a convergence check.
     Force fields with no profile are simply absent.
+
+    ``data`` reads the profiles from another directory (``data/data_Na`` holds
+    the same systems under the previous ion condition), and ``title`` overrides
+    the lipid-name panel title, which cannot tell two conditions of one lipid
+    apart.
     """
+    data = data or DATA
     plotted = False
     for ff, ff_label, colour in FORCEFIELDS:
-        path = DATA / f"{ff}_{lipid}_profile.xvg"
+        path = data / f"{ff}_{lipid}_profile.xvg"
         if not path.exists():
             continue
         plotted = True
         if partials:
             for part in range(1, N_PARTS + 1):
-                ppath = DATA / f"{ff}_{lipid}_part{part}_profile.xvg"
+                ppath = data / f"{ff}_{lipid}_part{part}_profile.xvg"
                 if not ppath.exists():
                     continue
                 px, py = load_xvg(ppath)
@@ -97,11 +149,13 @@ def draw_pmf(ax, lipid, partials=True, verbose=False):
         x, y = load_xvg(path)
         ax.plot(x, y - y.min(), color=colour, label=ff_label)
         if verbose:
-            print(f"  {lipid:5s} {ff:8s} barrier = {y.max() - y.min():.1f} kJ/mol")
+            b = barrier(ff, lipid, data=data)
+            print(f"  {lipid:5s} {ff:8s} pore barrier = {b:.1f} kJ/mol "
+                  f"(profile spans 0..{y.max() - y.min():.1f})")
     ax.axhline(0.0, color="0.6", lw=0.5, ls="--")
     ax.set_xlim(0.0, 1.0)
     ax.set_xlabel(r"$\xi$")
-    ax.set_title(lipid)
+    ax.set_title(lipid if title is None else title)
     if not plotted:
         print(f"note: {lipid} has no profile data (blank panel)")
     return plotted

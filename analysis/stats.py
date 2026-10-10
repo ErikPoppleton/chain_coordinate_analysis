@@ -2,16 +2,18 @@
 r"""Autocorrelation diagnostics for the **equilibrium** per-frame timeseries.
 
 For each force field / lipid / replicate, and for each per-frame observable, this
-computes the **statistical inefficiency** ``g`` and the maximum effective number
-of uncorrelated samples ``Neff_max`` via **pymbar** (``pymbar.timeseries``):
-``statistical_inefficiency`` for the whole-series ``g_full`` and
-``detect_equilibration`` (Chodera's automatic-equilibration estimator) for
-``t0`` / ``g_prod`` / ``Neff_max``.
+computes the equilibration cutoff ``t0``, the **statistical inefficiency** ``g``
+and the maximum effective number of uncorrelated samples ``Neff_max``.  ``t0``
+comes from **pymbar**'s ``detect_equilibration`` (Chodera's automatic-
+equilibration estimator); every ``g`` (``g_full`` on the whole series, ``g_prod``
+on ``[t0:]``) and ``Neff_max = (T - t0) / g_prod`` come from the shared
+``autocorr.statistical_inefficiency``, which is pymbar's own exact estimator
+reimplemented in pure numpy (agrees to ~1e-15; see ``autocorr``'s docstring).
 
 The reported ``g`` column is the **production-region** ``g_prod`` (estimated over
 the equilibrated span ``[t0, T]``), per Chodera 2016 -- ``g`` and ``sigma^2`` are
 defined on the production portion, and this keeps ``g`` consistent with the
-``Neff_max = (T - t0 + 1) / g_prod`` beside it.  ``g_full`` (the whole series,
+``Neff_max = (T - t0) / g_prod`` beside it.  ``g_full`` (the whole series,
 inflated by any pre-equilibration transient) is retained per-replicate in the
 JSON as a diagnostic only -- when ``t0`` is large (a still-drifting run) the two
 diverge sharply (e.g. AMBER DMPG APL: g_full ~136 vs g_prod ~18).
@@ -62,9 +64,10 @@ DATA = ROOT / "data"
 
 # --- statistical inefficiency -------------------------------------------------
 # g comes from the shared ``autocorr`` engine (pure numpy) so the SAME estimator
-# is used here and in the OST-python-2.7 tilt pipeline; it is bit-identical to
-# ``pymbar.timeseries.statistical_inefficiency(fft=True)`` on the project's
-# series (validated).  pymbar is retained only for ``detect_equilibration`` (the
+# is used here and in the OST-python-2.7 tilt pipeline; it matches
+# ``pymbar.timeseries.statistical_inefficiency`` (default and ``fft=True``) to
+# ~1e-15 on every project series -- the same estimator, differing only in
+# rounding.  pymbar is retained only for ``detect_equilibration`` (the
 # automatic-equilibration t0 scan), which has no pure-numpy equivalent here.
 
 def statistical_inefficiency(A):
@@ -77,8 +80,14 @@ def detect_equilibration(A, nskip=1):
 
     pymbar picks t0 = argmax Neff(t0); we re-derive g_prod/Neff_max from the
     shared ``autocorr`` engine on the equilibrated span so every reported g is
-    from one estimator (the two agree to <1% -- pymbar's own g is kept as the
-    t0-selection driver only)."""
+    from one (exact) estimator.  pymbar's own returned g is discarded: its
+    ``detect_equilibration`` defaults to ``fast=True``, a lag-skipping
+    approximation that on the project series differs from the exact g on
+    ``[t0:]`` by a median 13 % (max 40 %).  The t0 scan itself also runs on that
+    fast g, so t0 is not exactly the exact-g argmax -- an exact (``fast=False``)
+    scan picks a different t0 for 48 of the 108 series.  This doesn't matter in
+    practice: the shift is 0 at the median (max 114 ns, on a flat series), and
+    the production mean moves by at most 0.03 frame-SD."""
     A = np.asarray(A, dtype=float)
     t0, _g_pymbar, _neff_pymbar = pymbar_ts.detect_equilibration(A, nskip=nskip)
     t0 = int(t0)

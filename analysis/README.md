@@ -152,7 +152,7 @@ Pull down, for the local branches (B, C, D and the index builders below):
 The `.gro` files are not optional: MDAnalysis 2.10 cannot read the GROMACS 2026 `.tpr` format.
 
 **AMBER `.gro` files need their lipid residues renumbered.** GROMACS numbers
-every Lipid17 residue `1`, so MDAnalysis merges each lipid's sn-2 tail with the
+every Lipid21 residue `1`, so MDAnalysis merges each lipid's sn-2 tail with the
 next lipid's sn-1 (257 residues instead of 384) and `make_lipidator_index` /
 `tilt_convert` refuse with "lipid residues not a multiple of 3". Run this on
 every freshly downloaded AMBER topology — it is idempotent, and a no-op on a
@@ -344,7 +344,7 @@ analysis only.
 |---|---|
 | `umbrella{i}/` | the umbrella windows along ξ, 50 ns each (`md.tpr`, `md.xtc`, `md_pullx.xvg`) |
 | `umbrella23/` | the **final window, ξ = 1** (the open pore) — run **200 ns** instead of 50, for pore geometry |
-| `umbrella23/close{1..10}/` | 10 × 5 ns metastability replicates, restarted from the final ξ = 1 configuration (`setup_scripts/setup_release.sh`) |
+| `umbrella23/close{1..10}/` | 10 metastability replicates (5 ns by default, extended to 30 ns where the pore had not closed), restarted from the final ξ = 1 configuration (`setup_scripts/setup_release.sh`) |
 
 ### 4a — PMFs along ξ  *(cluster, `gmx wham` from the fork)*
 
@@ -379,7 +379,7 @@ Download the profiles into `data/` labeled by forcefield (this naming convention
 | Downloaded as | From |
 |---|---|
 | `data/{ff}_{lipid}_profile.xvg` | the full-length `gmx wham` profile |
-| `data/{ff}_{lipid}_part{1..5}_profile.xvg` | `part${i}_profile.xvg` above (consecutive 20 ns windows) |
+| `data/{ff}_{lipid}_part{1..5}_profile.xvg` | `part${i}_profile.xvg` above (consecutive 10 ns windows of the 50 ns production run) |
 | `data/{ff}_{lipid}_20-100_profile.xvg` | optional: a single `-b 20000` run (80 ns window test for DMPC) |
 
 ```bash
@@ -428,8 +428,9 @@ left blank, so a partial download still plots.
 
 ### 4c — Pore metastability  *(the `close` replicates)*
 
-`setup_release.sh`, run from `umbrella23/`, spawns `close{1..10}/` — 10 × 5 ns
-runs restarted from the final ξ = 1 configuration (`md.cpt`/`md.gro`) with the
+`setup_release.sh`, run from `umbrella23/`, spawns `close{1..10}/` — 10 runs
+(5 ns by default, extended to 30 ns where the pore had not closed; see Step 5
+of the [root README](../README.md)) restarted from the final ξ = 1 configuration (`md.cpt`/`md.gro`) with the
 umbrella force constant zeroed, so the pore is free to close while ξ keeps being
 recorded. Download the ξ
 traces as `data/{ff}_{lipid}_close{1..10}_pullx.xvg`:
@@ -537,7 +538,7 @@ runs under Python 2.7), and every other script imports from it:
 | In `lipiddefs.py` | What it defines |
 |---|---|
 | `FORCEFIELDS`, `FF_LABELS`, `LIPIDS`, `REPS` | the systems — keys (= filename prefixes), display labels, replicate numbers |
-| `SCHEME` | residue layout per force field: `"single"` (CHARMM/SLipids, one residue per lipid) vs `"amber"` (Lipid17 tail–head–tail) |
+| `SCHEME` | residue layout per force field: `"single"` (CHARMM/SLipids, one residue per lipid) vs `"amber"` (Lipid21 tail–head–tail) |
 | `TAIL_NC` (alias `TERM`) | carbons per acyl chain, carbonyl counted as C1 |
 | `DOUBLE_BOND`, `CHAIN_MID` | cis double-bond position per lipid (absent ⇒ saturated) and the mid-chain carbon used for the saturated density group |
 | `AMBER_HEAD`, `AMBER_TAIL` | AMBER head / tail residue names per lipid |
@@ -595,7 +596,7 @@ Pore-formation figures (§4):
 
 | File | Contents |
 |---|---|
-| `pmf_profiles.png` | PMFs along ξ, 1×3 lipid panels, 20 ns partials behind |
+| `pmf_profiles.png` | PMFs along ξ, 1×3 lipid panels, 10 ns partials behind |
 | `range_vs_time_{lipid}.png`, `range_vs_starttime_{lipid}.png` | PMF energy range vs sampling length / window start |
 | `poredens_{water,phosphorus,glycerol_c2,midpoint_c}.png` | cylindrically-averaged (r, z) density maps around the pore |
 | `poredens_zoom_{water,phosphorus}.png` | the same, restricted to the CV cylinder |

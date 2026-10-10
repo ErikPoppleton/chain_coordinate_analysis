@@ -45,6 +45,49 @@ def load_pullx(path, stride=STRIDE):
     return np.array(xs) * PS_TO_NS, np.array(ys)
 
 
+def last_time(path, tail_bytes=4096):
+    """Time (ns) of the last complete sample in a pullx .xvg, without parsing
+    the file: seek to the end and walk back through the final lines until one
+    parses (a file still being written can end mid-line)."""
+    with open(path, "rb") as fh:
+        fh.seek(0, 2)
+        fh.seek(max(0, fh.tell() - tail_bytes))
+        lines = fh.read().decode(errors="replace").splitlines()
+    for line in reversed(lines):
+        cols = line.split()
+        if len(cols) < 2 or line[0] in "#@&":
+            continue
+        try:
+            float(cols[1])
+            return float(cols[0]) * PS_TO_NS
+        except ValueError:
+            continue
+    return None
+
+
+def run_length(ff, lipid, verbose=True):
+    """Run length (ns) of a system's close replicates: the longest replicate's
+    last time, rounded up to a whole ns.  Prints a warning when the replicates
+    end at different times -- a download or run that has not finished."""
+    ends = []
+    for i in range(N_REP):
+        path = DATA / f"{ff}_{lipid}_close{i + 1}_pullx.xvg"
+        if path.exists():
+            t = last_time(path)
+            if t is not None:
+                ends.append(t)
+    if not ends:
+        return None
+    longest = max(ends)
+    short = [t for t in ends if t < longest - 1e-6]
+    if verbose and (short or len(ends) < N_REP):
+        print(f"warning: {ff}_{lipid}: {len(ends) - len(short)}/{N_REP} "
+              f"replicates reach {longest:g} ns; the others end at "
+              f"{', '.join(f'{t:g}' for t in sorted(short)) or 'nothing (missing)'} ns"
+              " -- incomplete download or run?")
+    return float(np.ceil(longest - 1e-9))
+
+
 def draw_close(ax, ff, lipid, stride=STRIDE, lw=LINEWIDTH, verbose=False):
     """The ten close trajectories of one system, dark (rep 1) -> light (rep 10)."""
     cmap = CMAPS[ff]

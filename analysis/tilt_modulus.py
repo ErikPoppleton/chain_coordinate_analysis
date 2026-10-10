@@ -91,7 +91,7 @@ import lipid_analysis  # noqa: E402
 # Shared pure-numpy autocorrelation engine (analysis/ is on sys.path[0] when this
 # script is run directly).  Used to size the within-run chi block average from
 # the decorrelation time of the per-frame tilt spread -- pymbar isn't importable
-# under the OpenStructure Python 2.7, autocorr is (validated bit-identical to it).
+# under the OpenStructure Python 2.7, autocorr is (the same estimator; agrees to ~1e-15).
 import autocorr  # noqa: E402
 # WATER: every water resname we might see.  TERM: the last acyl carbon of
 # each chain, per lipid -- the tail reference point is the COM of the last THREE

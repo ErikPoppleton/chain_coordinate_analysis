@@ -14,7 +14,7 @@ Director = normalized COM(head) -> COM(tail).
 Atom-name schemes:
   * CHARMM / SLipids  (one residue/lipid): phosphate `P`, glycerol `C2`,
     carbonyls `C21`/`C31`, sn-1 acyl `C2{k}`, sn-2 acyl `C3{k}`.
-  * AMBER (Lipid17, three residues/lipid, tail-head-tail): phosphate `P31`,
+  * AMBER (Lipid21, three residues/lipid, tail-head-tail): phosphate `P31`,
     glycerol `C2`, carbonyls `C11`/`C21` (head residue), acyl `C1{k}` in each
     tail residue.  Positions are counted within the concatenated lipid.
 

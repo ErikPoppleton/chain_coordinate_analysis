@@ -9,13 +9,26 @@ interpreter where pymbar is unavailable.  Keeping the core estimator here means
 the tilt pipeline can compute a statistical inefficiency (hence a block size for
 its within-run chi error) in the same run, without shelling out to ``stats.py``.
 
-``statistical_inefficiency`` reproduces pymbar's definition ``g = 1 + 2*tau_ac``
-via the normalised fluctuation autocorrelation summed with the initial-positive
-truncation (Chodera 2007; the non-FFT path).  It is validated to agree with
-``pymbar.timeseries.statistical_inefficiency(fft=True)`` to within a few percent
-on the project's equilibrium series (see ``validate_against_pymbar`` in the
-stats-module tests) -- close enough that a block size derived from it matches
-what pymbar would choose.
+``statistical_inefficiency`` is the same estimator as pymbar 4.2's
+``pymbar.timeseries.statistical_inefficiency`` (Chodera 2007): ``g = 1 + 2 *
+sum_t C(t) (1 - t/N)``, with ``C(t)`` the fluctuation autocorrelation
+normalised by the ``1/N`` variance and averaged over the ``N - t`` overlapping
+pairs, truncated at the first ``C(t) <= 0`` past ``mintime`` (default 3), and
+floored at 1.  Line for line it is pymbar's default (non-FFT, ``fast=False``)
+loop with ``B_n = A_n``.  pymbar's ``fft=True`` path computes the same
+``C(t)`` (statsmodels ``acf(adjusted=True)`` also divides by ``N - t``) with
+the same truncation and weights.  Checked numerically on every project
+equilibrium series (APL, d_HH, d_HC, <dtheta^2> for all 9 systems x 3 reps, on
+the whole run and on its last two thirds; 218 series): the largest relative
+difference from either pymbar path is 1.2e-15, i.e. floating-point rounding
+only (equal to the bit in ~80 % of cases vs the non-FFT loop, ~20 % vs FFT).
+The one behavioural difference is a constant series, for which pymbar raises
+``ParameterError`` and this returns 1.
+
+Note this is *not* the ``g`` that ``pymbar.timeseries.detect_equilibration``
+returns: that defaults to ``fast=True``, which skips lags with a growing
+increment and so only approximates ``g``.  ``stats.py`` uses pymbar for the
+``t0`` scan only and recomputes ``g`` on ``[t0:]`` with this function.
 """
 
 import math
@@ -181,7 +194,21 @@ def hierarchical_ci(series, t0s=None):
     agree (``within`` dominates -> t ~ 1.96 on the pooled effective d.o.f.) and
     to the honest replicate-spread CI when they do not (``between`` dominates
     -> t on ``n-1`` d.o.f.), so between-run systems (e.g. AMBER DMPG) are not
-    falsely tightened.  Returns a dict (or ``None`` if no usable replicate):
+    falsely tightened.
+
+    The point estimate ``mean`` is the **unweighted** mean of the per-replicate
+    production-span means -- each run counts equally, however many frames
+    survive its ``t0``.  Deliberate: in the between-run regime each run mean is
+    one draw from the run-to-run distribution, so equal weights are near-optimal
+    and match the ``between_sd/sqrt(n)`` SE.  In the pooled regime the optimal
+    estimator would be inverse-variance (weights ``1/SEM_r^2``, i.e. ~``Neff``,
+    not frame count), with the matching SE ``1/sqrt(sum 1/SEM_r^2)``; on the
+    project's APL/d_HH/d_HC cells that would move the mean by a median 4 % and
+    at most 20 % of the CI half-width (frame-count weighting: <= 4 %), so the
+    simpler estimator is kept.  Reweighting the mean without also changing the
+    SE formula would be inconsistent.
+
+    Returns a dict (or ``None`` if no usable replicate):
     ``mean``, ``ci_half`` (95% half-width), ``se``, ``t``, ``dof``,
     ``between_sd``, ``within_sem``, ``sigma_between``, ``regime``, ``n``.
     """
@@ -308,6 +335,27 @@ def compare(ci_a, ci_b):
                             + vb ** 2 / max(1.0, ci_b["dof"]))
     return {"delta": delta, "se": se, "t": t, "dof": dof,
             "p": t_pvalue(t, dof)}
+
+
+def holm(pvals):
+    """Holm-Bonferroni step-down adjusted p-values, in the input order.
+
+    Controls the family-wise error rate at the nominal level with no
+    independence assumption, and is uniformly more powerful than Bonferroni.
+    The i-th smallest of ``m`` p-values is scaled by ``m - i`` (0-based ``i``);
+    a running maximum keeps the adjusted values monotone in the raw ones, and
+    they are capped at 1.  ``None`` entries are passed through and do not count
+    towards ``m``.  Compare the adjusted value against the unadjusted threshold
+    (e.g. ``stars(p_holm)``).
+    """
+    idx = [i for i, p in enumerate(pvals) if p is not None]
+    m = len(idx)
+    out = list(pvals)
+    running = 0.0
+    for rank, i in enumerate(sorted(idx, key=lambda k: pvals[k])):
+        running = max(running, min(1.0, (m - rank) * float(pvals[i])))
+        out[i] = running
+    return out
 
 
 def stars(p, ns="n.s."):

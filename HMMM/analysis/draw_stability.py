@@ -50,7 +50,7 @@ SMOOTH_NS = stab.SMOOTH_NS
 BAR_W = 0.26
 OFFSETS = np.array([-0.28, 0.0, 0.28])
 
-# The properties figure flags an unstable system the same way.  Matplotlib sets
+# How the properties figure flags an unstable system.  Matplotlib sets
 # hatch density by *repeating* the pattern character, so HATCH_DENSITY is the
 # number of repeats: the boxes being marked can be only a few mm tall at
 # 180 mm, and at the one- or two-repeat default a cross-hatch puts barely a
@@ -88,13 +88,13 @@ def draw_stability_time(ax, verbose=False):
 
     The bar is the mean over replicates and the dots are the individual runs --
     which matters here, because the systems that fail do not fail in all three
-    (CHARMM NPT breaks in two runs of three, CHARMM NPAT in one).  A system with
-    any replicate short of the full microsecond is overdrawn with the red
-    ``//\\\\`` hatch used throughout the properties figure.
+    (CHARMM NPT breaks in two runs of three, CHARMM NPAT in one).  No hatch
+    here, unlike the properties figure: the bar heights already say which
+    systems fell short of the full microsecond.
     """
     records = stab.load()
     for fi, ff in enumerate(FORCEFIELDS):
-        xs, ys, hatched, points = [], [], [], []
+        xs, ys, points = [], [], []
         for ei, ens in enumerate(ENSEMBLES):
             times = [records[run_stem(ff, ens, r)]["stability_ns"]
                      for r in REPS if run_stem(ff, ens, r) in records]
@@ -103,7 +103,6 @@ def draw_stability_time(ax, verbose=False):
             x = ei + OFFSETS[fi]
             xs.append(x)
             ys.append(float(np.mean(times)))
-            hatched.append(stab.any_unstable(records, ff, ens))
             points.append((x, times))
             if verbose:
                 print("  %-8s %-6s stability %s ns" % (ff, ens,
@@ -113,13 +112,6 @@ def draw_stability_time(ax, verbose=False):
         ax.bar(xs, ys, BAR_W, color=[colour(ff, e) for e in ENSEMBLES[:len(xs)]],
                edgecolor="black", linewidth=0.7,
                label=FF_LABELS[ff] if fi == 0 else None)
-        # Red hatching is drawn as a second, face-less patch so the bar keeps
-        # its black outline: matplotlib ties hatch colour to the edge colour.
-        flag_x = [x for x, h in zip(xs, hatched) if h]
-        flag_y = [y for y, h in zip(ys, hatched) if h]
-        if flag_x:
-            ax.bar(flag_x, flag_y, BAR_W, facecolor="none",
-                   edgecolor=HATCH_COLOUR, linewidth=0.0, hatch=HATCH)
         for x, times in points:
             ax.plot([x] * len(times), times, ls="none", marker="o",
                     markersize=2.0, markerfacecolor="white",

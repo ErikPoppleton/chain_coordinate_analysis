@@ -108,12 +108,21 @@ def pairwise(cis):
     ``cis`` is the per-force-field list of hierarchical-CI dicts (None where a
     system is missing).  Adjacent pairs come first so their brackets stack
     innermost-first.
+
+    Each compare-dict gains ``p_holm``: the Holm-adjusted p-value, with the
+    family being the (up to three) pairwise comparisons *within this group* --
+    one lipid's (or one ion condition's) force-field ladder, the set of
+    brackets drawn together.  Stars are taken from ``p_holm``.
     """
     out = []
     for i, j in ((0, 1), (1, 2), (0, 2)):
         if i >= len(cis) or j >= len(cis) or cis[i] is None or cis[j] is None:
             continue
         out.append(((i, j), autocorr.compare(cis[i], cis[j])))
+    adj = autocorr.holm([c["p"] if c else None for _, c in out])
+    for (_, c), pa in zip(out, adj):
+        if c is not None:
+            c["p_holm"] = pa
     return out
 
 
@@ -152,12 +161,13 @@ def sig_brackets(ax, cis, tops, show_ns=True, star_pt=6.0, verbose=False,
         for (i, j), cmp in pairwise(cis[lipid]):
             if cmp is None:
                 continue
-            mark = autocorr.stars(cmp["p"], ns="n.s.")
+            mark = autocorr.stars(cmp["p_holm"], ns="n.s.")
             if verbose:
                 ffs = [f for f, _, _ in FORCEFIELDS]
                 print(f"  {lipid:5s} {ffs[i]:8s} vs {ffs[j]:8s}  "
                       f"delta={cmp['delta']:+.3f}  t={cmp['t']:+.2f}  "
-                      f"dof={cmp['dof']:.1f}  p={cmp['p']:.2e}  {mark}")
+                      f"dof={cmp['dof']:.1f}  p={cmp['p']:.2e}  "
+                      f"p_holm={cmp['p_holm']:.2e}  {mark}")
             if mark == "n.s." and not show_ns:
                 level += 1
                 continue

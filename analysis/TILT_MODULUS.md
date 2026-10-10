@@ -69,7 +69,7 @@ interactive `ost` launcher would normally do: it imports `ost.img`, and it calls
 
 ### AMBER only: renumber the gro first
 
-Lipid17 numbers every residue `1`. MDAnalysis then merges each lipid's sn-2
+Lipid21 numbers every residue `1`. MDAnalysis then merges each lipid's sn-2
 tail with the next lipid's sn-1, and both `tilt_convert.py` and
 `make_lipidator_index.py` refuse to run ("lipid residues not a multiple of 3").
 Fix the gro in place first. Non-AMBER files are skipped:

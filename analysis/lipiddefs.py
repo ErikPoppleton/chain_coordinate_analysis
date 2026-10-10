@@ -13,7 +13,7 @@ Kept **pure stdlib and Python 2/3 compatible** (like ``autocorr.py``) because
 Force-field "schemes"
 ---------------------
 CHARMM and SLipids put a whole lipid in **one residue** (scheme ``"single"``),
-naming the sn-1 chain ``C2x`` and the sn-2 chain ``C3x``.  AMBER (Lipid17)
+naming the sn-1 chain ``C2x`` and the sn-2 chain ``C3x``.  AMBER (Lipid21)
 splits each lipid into **tail-head-tail residues** (scheme ``"amber"``), so both
 chains are separate residues that share the carbon naming ``C1x``.  Almost every
 force-field conditional in the repo is really a test on this scheme.
@@ -79,11 +79,11 @@ CHAIN_MID = 7
 
 # --- residue / atom vocabulary --------------------------------------------
 
-# AMBER (Lipid17) residue names: one head + two identical tail residues.
+# AMBER (Lipid21) residue names: one head + two identical tail residues.
 AMBER_HEAD = _ByLipid({"DOPC": "PC", "DMPC": "PC", "DMPG": "PGR"})
 AMBER_TAIL = _ByLipid({"DOPC": "OL", "DMPC": "MY", "DMPG": "MY"})
 
-# One phosphorus per lipid: CHARMM/SLipids "P", AMBER (Lipid17) "P31".
+# One phosphorus per lipid: CHARMM/SLipids "P", AMBER (Lipid21) "P31".
 PHOSPHATE_NAMES = set(["P", "P31"])
 PHOSPHATE_SEL = "name P P31"        # the MDAnalysis/lipyphilic form
 

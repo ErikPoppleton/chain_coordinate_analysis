@@ -212,13 +212,18 @@ def _across_conditions(prop, cis, verbose):
     a, b = cis.get(COND_KEYS[0]), cis.get(COND_KEYS[1])
     if not a or not b:
         return
+    rows = []
     for fi, (ff, _, _) in enumerate(FORCEFIELDS):
         if fi >= len(a) or fi >= len(b) or a[fi] is None or b[fi] is None:
             continue
-        cmp = autocorr.compare(a[fi], b[fi])
+        rows.append((ff, autocorr.compare(a[fi], b[fi])))
+    # Holm across the three force fields' K+ vs Na+/JC tests for this property.
+    adj = autocorr.holm([cmp["p"] for _, cmp in rows])
+    for (ff, cmp), pa in zip(rows, adj):
         print(f"  {prop:10s} {ff:8s} K+ vs Na+/JC  "
               f"delta={cmp['delta']:+.3f}  dof={cmp['dof']:.1f}  "
-              f"p={cmp['p']:.2e}  {autocorr.stars(cmp['p'], ns='n.s.')}")
+              f"p={cmp['p']:.2e}  p_holm={pa:.2e}  "
+              f"{autocorr.stars(pa, ns='n.s.')}")
 
 
 def draw_box(ax, prop, show_ns=True, star_pt=6.0, verbose=False):

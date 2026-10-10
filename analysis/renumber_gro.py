@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Renumber the lipid residues of an AMBER (Lipid17) GROMACS ``.gro``.
+"""Renumber the lipid residues of an AMBER (Lipid21) GROMACS ``.gro``.
 
-GROMACS writes every Lipid17 residue with resid ``1``, and a lipid's three
+GROMACS writes every Lipid21 residue with resid ``1``, and a lipid's three
 residues (tail ``OL``/``MY`` -- head ``PC``/``PGR`` -- tail) sit contiguously,
 so the sn-2 tail of one lipid and the sn-1 tail of the next merge into a single
 80-atom residue as far as MDAnalysis is concerned.  That breaks every tool that

@@ -2,7 +2,7 @@
 numbering on the way.
 
 MDAnalysis can't read the GROMACS 2026 ``.tpr``, so (as in the parent project)
-the ``.gro`` is the topology.  The AMBER (Lipid17) ``.gro`` numbers **every**
+the ``.gro`` is the topology.  The AMBER (Lipid21) ``.gro`` numbers **every**
 lipid residue ``1`` and lays a lipid out tail-head-tail (``VL``-``PC``-``VL``),
 so MDAnalysis merges the whole 17920-atom lipid block into a couple of giant
 residues.  That is fatal here rather than merely untidy: every lipyphilic

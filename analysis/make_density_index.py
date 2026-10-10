@@ -20,7 +20,7 @@ The last two use constant group names (varying only the underlying carbon) so a
 Atom naming (verified against the gro files):
   * CHARMM & SLipids -- one lipid residue; acyl carbons ``C2{n}`` (sn-1) /
     ``C3{n}`` (sn-2), glycerol ``C2``, phosphate ``P``.
-  * AMBER (Lipid17) -- head residue (``PC``/``PGR``) carries glycerol ``C2`` and
+  * AMBER (Lipid21) -- head residue (``PC``/``PGR``) carries glycerol ``C2`` and
     phosphate ``P31``; each of the two tail residues (``OL``/``MY``) carries the
     acyl carbons ``C1{n}`` (so a chain-position group matches 2x the lipid count).
 
@@ -61,7 +61,7 @@ DATA = ROOT / "data"
 def detect(resnames):
     """Infer (ff, scheme, lipid) from the residue names present.
 
-    AMBER is identified by its *lipid residue layout* (Lipid17 splits each lipid
+    AMBER is identified by its *lipid residue layout* (Lipid21 splits each lipid
     into head PC/PGR + tails OL/MY); CHARMM and SLipids each keep the whole
     lipid in one residue, so they are told apart by the solvent.  Water alone is
     no longer enough: the rebuilt DMPG systems gave SLipids AMBER-style solvent

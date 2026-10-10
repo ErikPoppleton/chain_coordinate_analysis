@@ -18,7 +18,7 @@ sees each lipid as ONE residue with a head->tail vector inside it):
     atom names.  Applied to all three force fields so the density is built
     identically for a fair comparison.
 
-  * **AMBER residue merge.**  Lipid17 splits each lipid into three residues in
+  * **AMBER residue merge.**  Lipid21 splits each lipid into three residues in
     tail-head-tail order (``MY``/``OL``, ``PC``/``PGR``, ``MY``/``OL``).  We give
     all three one resname (``LIP``) and a shared resid so OST reads them as one
     residue.  Both tails otherwise carry identical carbon names (``C1{n}``),
@@ -31,7 +31,7 @@ sees each lipid as ONE residue with a head->tail vector inside it):
 
   * **Water** is reduced to its oxygen and rebuilt as one residue per molecule
     with resids above the lipids.  This is required because the AMBER gro numbers
-    *every* water with the same resid (a Lipid17/GROMACS quirk) -- MDAnalysis
+    *every* water with the same resid (a Lipid21/GROMACS quirk) -- MDAnalysis
     then sees one giant water residue and OST collapses all the identically named
     oxygens into a single atom.  Rebuilding one-residue-per-water fixes it and is
     harmless for CHARMM/SLipids (already per-molecule).  Ions are dropped.

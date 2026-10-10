@@ -22,7 +22,7 @@ Tail atom set per force field (verified against the ``traj/*.gro`` naming):
     and ``C3{2..N}`` (sn-2) -- i.e. everything past the carbonyl ``C2 1``/``C3 1``
     -- plus their bonded hydrogens (found by geometry, so the differing CHARMM vs
     SLipids H-naming does not matter).
-  * AMBER (Lipid17) -- each tail is its own residue ``OL`` (DOPC) / ``MY`` (DMPx)
+  * AMBER (Lipid21) -- each tail is its own residue ``OL`` (DOPC) / ``MY`` (DMPx)
     holding exactly the aliphatic carbons ``C1{2..N}`` + hydrogens (the carbonyl
     ``C1 1``/``C2 1`` lives in the head residue), so the whole tail residue *is*
     the hydrophobic tail -- no name masking or bond guessing needed.

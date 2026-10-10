@@ -40,7 +40,7 @@ Atom naming (verified geometrically against ``snapshots/*.gro``)
 * CHARMM & SLipids: one residue per lipid.  sn-1 = ``C21``(carbonyl)..``C2N``,
   sn-2 = ``C31``..``C3N`` (N=18 DOPC, 14 DMPC/DMPG).  DOPC double bond
   ``C29=C210`` (sn-1), ``C39=C310`` (sn-2).
-* AMBER (Lipid17): each lipid is three residues -- tail, head, tail.  The two
+* AMBER (Lipid21): each lipid is three residues -- tail, head, tail.  The two
   carbonyls live in the head (``PC``/``PGR``): ``C11`` for the chain *before*
   the head, ``C21`` for the chain *after*.  Tail residues (``OL`` oleoyl / ``MY``
   myristoyl) name their carbons ``C1x`` = fatty-acid carbon ``x`` (C12..C1N).
@@ -111,7 +111,7 @@ def read_gro(path):
 
 def split_residues(atoms):
     """Split the atom stream into residues *without trusting resid*, which is
-    unreliable in raw Lipid17 output (every residue numbered 1, adjacent tails
+    unreliable in raw Lipid21 output (every residue numbered 1, adjacent tails
     merging).  A new residue starts whenever the residue name changes or an atom
     name repeats (each residue carries every atom name at most once).
 
@@ -139,7 +139,7 @@ def detect(atoms):
     resn = {a[1] for a in atoms}
     # AMBER is identified by its lipid residue layout, never by the water name:
     # the rebuilt SLipids DMPG carries AMBER-style TP3 water, and the old
-    # "TP3 implies AMBER" test made it look like a Lipid17 system with no
+    # "TP3 implies AMBER" test made it look like a Lipid21 system with no
     # OL/MY residues ("no DMPG lipids found").  See make_density_index.detect.
     if resn & {"OL", "MY", "PC", "PGR"}:
         det_ff = "amber"
@@ -195,7 +195,7 @@ def build_single(residues, lipid):
 
 
 def build_amber(residues, lipid):
-    """AMBER Lipid17: pair each head (PC/PGR) with its two flanking tail residues
+    """AMBER Lipid21: pair each head (PC/PGR) with its two flanking tail residues
     and split them into the C11-chain (sn-1) and C21-chain (sn-2) by which
     carbonyl each tail's first carbon (C12) sits next to."""
     head_rn, tail_rn = AMBER_HEAD[lipid], AMBER_TAIL[lipid]

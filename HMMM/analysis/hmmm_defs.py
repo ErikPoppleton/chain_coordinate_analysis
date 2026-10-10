@@ -53,7 +53,7 @@ DT_NS = 1.0          # ns per frame (1 ns sampling, 1 us runs -> 1001 frames)
 # --- residue / atom vocabulary --------------------------------------------
 
 # Residue layout, as in the parent project: CHARMM/SLipids keep a whole lipid
-# in one residue; AMBER (Lipid17) splits it tail-head-tail.
+# in one residue; AMBER (Lipid21) splits it tail-head-tail.
 SCHEME = {"charmm": "single", "amber": "amber", "slipids": "single"}
 
 # CHARMM/SLipids name the single lipid residue after the parent lipid even
@@ -67,7 +67,7 @@ AMBER_TAIL = "VL"            # valeroyl -- the short HMMM tail residue
 
 LIPID_RESNAMES = SINGLE_RESN_ALIASES | set([AMBER_HEAD, AMBER_TAIL])
 
-# One phosphorus per lipid: CHARMM/SLipids "P", AMBER (Lipid17) "P31".  Same
+# One phosphorus per lipid: CHARMM/SLipids "P", AMBER (Lipid21) "P31".  Same
 # selection as the parent project, so lipyphilic code ports unchanged.
 PHOSPHATE_NAMES = set(["P", "P31"])
 PHOSPHATE_SEL = "name P P31"

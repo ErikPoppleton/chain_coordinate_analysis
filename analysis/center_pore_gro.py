@@ -19,7 +19,7 @@ apart at the seam), then writes:
 `render_snapshots.py` prefers both when present, so the committed
 ``*_cyl_style.pml`` stays the untouched record of the run's real geometry.
 
-Molecules are found by *bonds*, guessed geometrically -- the raw Lipid17 gros
+Molecules are found by *bonds*, guessed geometrically -- the raw Lipid21 gros
 number every residue 1, so residue-based wrapping would move the whole lipid
 block as one unit and wrap nothing.
 
@@ -74,7 +74,7 @@ def centre(gro, verbose=True):
               f"({shift[0] / 10:+.2f}, {shift[1] / 10:+.2f}) nm")
 
     u.atoms.translate(shift)
-    # Whole-molecule wrap: bonds are guessed because a raw Lipid17 gro numbers
+    # Whole-molecule wrap: bonds are guessed because a raw Lipid21 gro numbers
     # every residue 1, which would make "residues" useless here.
     u.atoms.guess_bonds()
     u.atoms.wrap(compound="fragments", inplace=True)

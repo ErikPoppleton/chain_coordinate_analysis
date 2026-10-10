@@ -18,7 +18,9 @@ Error scheme (per column, by what data is available):
     and the grand-mean SE takes ``max(between_sd^2, within_sem^2)/n`` -- the
     pooled pseudoreplication limit where the replicates agree, the honest
     replicate-spread CI where they do not (so AMBER/SLipids DMPG are not falsely
-    tightened).  The point estimate is unchanged (grand mean over frames & reps).
+    tightened).  The point estimate is the unweighted mean of the per-replicate
+    production-span (``[t0:]``) means -- each run weighted equally, regardless
+    of how many frames its burn-in left (see ``autocorr.hierarchical_ci``).
   * The **tilt moduli** (chi, kappa) also get a hierarchical 95% CI, but from
     pre-computed per-replicate estimates: each run yields a scalar plus a
     block-averaged within-run SEM (``chi_block_sem`` in ``tilt_moduli.json``,
@@ -216,9 +218,10 @@ def collect():
             cell = {}
             # --- lipyphilic (per-frame observables -> hierarchical 95% CI) ---
             # APL per frame = mean over lipids; d_HH per frame (A->nm); d_HC per
-            # frame (already nm).  The point estimate is unchanged (grand mean
-            # over frames & reps); only the error becomes the autocorrelation-
-            # aware CI in place of the SD across replicate means.
+            # frame (already nm).  Point estimate = unweighted mean of the per-
+            # replicate production-span ([t0:]) means (each run counts equally,
+            # not by its post-t0 frame count); error = the autocorrelation-aware
+            # hierarchical CI in place of the old SD across replicate means.
             cell["apl"] = ci_cell(series_reps(
                 npz["area_per_lipid"], "%s_%s_eq%d", ff, lipid, lambda a: a.mean(axis=1)),
                 t0_reps(t0map, "apl", ff, lipid))

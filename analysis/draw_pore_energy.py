@@ -11,13 +11,17 @@ panels serve an exploratory plot and ``figures/fig02_pore_energy.py``.
 ``draw_vs_barrier(ax, prop)``      an equilibrium property against that
                                    system's pore-nucleation barrier, coloured
                                    by force field and shaped by lipid.
+``draw_umbrella_hist(ax, ff, lipid)``
+                                   the gmx wham umbrella-window histograms
+                                   behind one system's PMF (SI figure).
 ``group_fits(prop)``               least-squares DeltaG(x) fits for AMBER and
                                    for CHARMM+SLipids separately, printed (not
                                    drawn) -- the two lines look parallel-but-
                                    offset in the d_HC panel, and this quantifies
                                    how much of that is slope vs y-offset.
 
-The barrier is the min->max range of the full profile, and the property means
+The barrier is the climb from the PMF basin to the pore-side peak
+(``barrier()``, not the min->max range), and the property means
 and error bars come straight from ``make_equilibrium_table.collect()`` -- so the
 figure, the summary table and the standalone ``plot_*_vs_barrier.py`` scripts
 cannot drift apart.  Requires numpy + matplotlib and the same ``data/`` inputs
@@ -63,6 +67,82 @@ def load_xvg(path):
             x.append(float(cols[0]))
             y.append(float(cols[1]))
     return np.array(x), np.array(y)
+
+
+def load_hist(path):
+    """``(xi, counts)`` from a gmx wham ``-hist`` .xvg: ``counts`` is
+    ``(n_bins, n_windows)``, one column per umbrella window."""
+    rows = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if line and line[0] not in "#@&":
+                rows.append([float(v) for v in line.split()])
+    a = np.array(rows)
+    return a[:, 0], a[:, 1:]
+
+
+def unique_windows(counts):
+    """Drop windows that exactly duplicate an earlier one.
+
+    The AMBER and SLipids DOPC wham runs list every window twice in their
+    input, so their ``-hist`` files carry 48 columns whose second half is
+    bit-identical to the first.  (Harmless for the PMF -- a uniform doubling
+    of the counts normalises away -- but drawn as-is the copies would overdraw
+    the originals in shifted colours.)  Returns ``(counts, n_dropped)``.
+    """
+    keep = []
+    for i in range(counts.shape[1]):
+        if not any(np.array_equal(counts[:, i], counts[:, j]) for j in keep):
+            keep.append(i)
+    return counts[:, keep], counts.shape[1] - len(keep)
+
+
+LAST_WINDOW_FACTOR = 4    # the xi = 1 window was run 4x longer than the rest
+
+
+def draw_umbrella_hist(ax, ff, lipid, data=None, lw=0.8, scale=1e-6,
+                       verbose=False):
+    """The umbrella-window histograms behind one system's PMF.
+
+    One line per window, coloured by matplotlib's ``tab10`` in window order (so
+    the ten colours cycle ~2.5 times over 24 windows).  Counts are scaled by
+    ``scale`` (default: millions).  Exact duplicate windows are dropped
+    (``unique_windows``).
+
+    The last (xi = 1) window was simulated ``LAST_WINDOW_FACTOR`` = 4x longer
+    than the others, so it is divided by 4 to put every window on the same
+    per-sample footing -- but only where its total count really is ~4x the
+    median of the others.  AMBER DMPC's windows all hold ~50 M samples, last
+    included, so dividing there would make the last window look under-sampled;
+    such a system is left as-is with a printed note.  Returns the number of windows drawn, or 0 if the
+    file is missing.
+    """
+    import matplotlib.pyplot as plt
+    path = Path(data or DATA) / f"{ff}_{lipid}_hist.xvg"
+    if not path.exists():
+        print(f"note: {path.name} missing (blank panel)")
+        return 0
+    xi, counts = load_hist(path)
+    counts, dropped = unique_windows(counts)
+    totals = counts.sum(axis=0)
+    ratio = totals[-1] / np.median(totals[:-1])
+    if abs(ratio - LAST_WINDOW_FACTOR) < 0.5:
+        counts = counts.copy()
+        counts[:, -1] /= LAST_WINDOW_FACTOR
+    else:
+        print(f"note: {ff}_{lipid}: last window holds {ratio:.2f}x the median "
+              f"window's samples, not {LAST_WINDOW_FACTOR}x -- left unscaled")
+    colours = plt.get_cmap("tab10").colors
+    for i in range(counts.shape[1]):
+        ax.plot(xi, counts[:, i] * scale, color=colours[i % len(colours)],
+                lw=lw)
+    if verbose or dropped:
+        print(f"  {lipid:5s} {ff:8s} {counts.shape[1]} windows"
+              + (f" ({dropped} exact duplicates dropped)" if dropped else ""))
+    ax.set_xlim(0.0, 1.05)
+    ax.set_ylim(bottom=0)
+    return counts.shape[1]
 
 
 def barrier(ff, lipid, data=None, verbose=False):
@@ -153,7 +233,8 @@ def draw_pmf(ax, lipid, partials=True, data=None, title=None, verbose=False):
             print(f"  {lipid:5s} {ff:8s} pore barrier = {b:.1f} kJ/mol "
                   f"(profile spans 0..{y.max() - y.min():.1f})")
     ax.axhline(0.0, color="0.6", lw=0.5, ls="--")
-    ax.set_xlim(0.0, 1.0)
+    # A little past 1 so the curves ending at xi = 1 clear the right spine.
+    ax.set_xlim(0.0, 1.05)
     ax.set_xlabel(r"$\xi$")
     ax.set_title(lipid if title is None else title)
     if not plotted:

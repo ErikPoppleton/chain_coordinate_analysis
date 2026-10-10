@@ -9,6 +9,10 @@ module load gromacs/2026.3
 for ff in amber charmm slipids; do 
 	for l in DMPC DOPC DMPG; do
 		cd ${ff}_${l}
+		if [ ! -f npt.gro ]; then
+    		echo "setup_equilibrium needs the npt.gro file from setup_pull.sh"
+			exit 1
+		fi
 		for r in 1 2 3; do
 		    rm -rf eq${r}
 		    mkdir eq${r}

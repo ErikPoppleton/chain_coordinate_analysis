@@ -45,11 +45,14 @@ PYTHONNOUSERSITE=1 conda run -n lipid64 python HMMM/analysis/rdf.py --nprocs 6
 
 # 6. snapshots -> HMMM/plots/snapshots/{ff}_{ens}{rep}.png
 PYTHONNOUSERSITE=1 conda run -n lipid64 python HMMM/analysis/render_snapshots.py
+#    + the two large AMBER NPAT runs -> big_hmmm_{stable,broken}.png
+python3 HMMM/analysis/render_big_hmmm.py
 
 # 7. figures -> HMMM/plots/final/
 PYTHONNOUSERSITE=1 conda run -n base python HMMM/figures/fig01_hmmm_stability.py
 PYTHONNOUSERSITE=1 conda run -n base python HMMM/figures/fig02_hmmm_properties.py
 PYTHONNOUSERSITE=1 conda run -n base python HMMM/figures/figSI_snapshots.py
+python3 HMMM/figures/figSI_big_hmmm.py
 ```
 
 **The order matters.** `stability.py` needs `thickness_variation.py`; `stats.py`,
@@ -79,10 +82,12 @@ for SLipids alone later will not clobber the CHARMM/AMBER results.
 | `plot_rdf.py` | styles them into `plots/rdf.png` and `plots/rdf_cn.png` |
 | `rdf_time.py` / `plot_rdf_time.py` | diagnostic: RDF first-peak position in 25 ns windows over the **whole** run (rep 1, no stability cut) → `plots/rdf_peak_time.png`; the peak does not move at breakup |
 | `render_snapshots.py` | headless PyMOL renders of every run's final configuration |
+| `render_big_hmmm.py` | oblique (45°, edge-on) renders of the two large AMBER NPAT final frames, `traj/big_hmmm_{stable,broken}.gro` |
 | `draw_stability.py` / `draw_properties.py` | `draw_*(ax)` painters for the two main-text figures |
 | `../figures/fig01_hmmm_stability.py` | figure 1 — stability |
 | `../figures/fig02_hmmm_properties.py` | figure 2 — properties |
 | `../figures/figSI_snapshots.py` | SI galleries — every run's final configuration, one figure per force field |
+| `../figures/figSI_big_hmmm.py` | SI figure — the two large AMBER NPAT runs, **a** stable / **b** broken |
 
 Shared infrastructure (`palette`, `figstyle`, `autocorr`, and the parent
 `stats.analyze_series`/`decompose`) is imported from `../../analysis`, so the
@@ -90,7 +95,7 @@ two branches use one colour scheme, one house figure style and one error model.
 
 ## Things that bit, and how they are handled
 
-**AMBER numbers every lipid residue `1`.**  Lipid17 lays a lipid out
+**AMBER numbers every lipid residue `1`.**  Lipid21 lays a lipid out
 tail–head–tail (`VL`–`PC`–`VL`) with a shared resid, so MDAnalysis merges the
 entire 17 920-atom lipid block into a couple of giant residues.  That is fatal
 rather than untidy: every lipyphilic analysis sizes its output by
@@ -255,11 +260,11 @@ the stable window first and finds `t0` inside it.
 ## Main-text figures
 
 **Figure 1 — stability** (`fig01_hmmm_stability.py`): 2×3, 180 × 118 mm.
-**a** a run that survived (AMBER posres), **b** how long each system stayed a
-bilayer (bars = mean over reps, dots = individual runs, dashed line = the full
-µs), **c** the lateral-SD traces b is read from, **d** destabilised but never
+**a** a run that survived (AMBER posres), **b** the lateral-SD traces c is read
+from, **c** how long each system stayed a bilayer (bars = mean over reps, dots =
+individual runs, dashed line = the full µs), **d** destabilised but never
 broken (AMBER NPT), **e** broken (CHARMM NPAT), **f** crashed (CHARMM NPT).
-Panel c is on a **log** y axis — the runs span 0.14 nm (a restrained flat
+(b and c were swapped on 2026-10-10.) Panel b is on a **log** y axis — the runs span 0.14 nm (a restrained flat
 bilayer) to 30 nm (a filament), and a linear axis would put every stable run on
 the baseline.
 
@@ -281,7 +286,9 @@ equivalent — they come from less trajectory, and from a system on its way to
 falling apart. It is drawn as a second, face-less patch over the artist, because
 matplotlib ties hatch colour to edge colour and the bars keep a black outline;
 on the RDF panels the SD *band* is hatched rather than the line restyled, so the
-curves stay comparable.
+curves stay comparable. The hatch is a **properties-figure** convention only: Figure 1's stability-time
+bars (panel c) are not hatched (removed 2026-10-10), since the bar heights
+themselves show which systems fell short.
 
 **NPAT fixes the lateral area by construction**, so its per-frame mean APL is a
 constant and its box in panel c degenerates to a line. That is not a plotting
@@ -298,6 +305,22 @@ numbers on it (runs 1 and 3 collapse at 401 and 461 ns, run 2 survives). No
 panel letters: a gallery is addressed by its row and column labels, and nine
 more letters would only compete with them. A force field with no renders yet is
 skipped rather than producing a grid of "missing" boxes.
+
+**Large-system SI figure** (`figSI_big_hmmm.py` → `SI_big_hmmm.*`, 180 × 86 mm, no titles,
+1×2): the final configurations of two large HMMM runs (904 lipids, AMBER, NPAT,
+~19.6 × 17.0 × 8.1 nm hexagonal box), one that stayed a bilayer and one that
+broke up, rendered by `render_big_hmmm.py` in the usual HMMM style. The camera
+is **45° above the membrane plane, facing an edge of the box**: only `turn x,
+-45` from the top-down view, no spin about z. It is orthoscopic and **framed on
+the eight corners of the rectangular brick** (+15 Å), rather than on the atoms,
+so both panels share one scale and the broken run cannot change the framing.
+The brick, not the hexagonal cell, because `trjconv -pbc mol` (default `-ur
+rect`) puts every molecule's centre in `[0, a_x) × [0, b_y) × [0, c_z)`, and the
+cell's slanted `b` vector would add ~10 nm of empty width. The camera is placed
+by view-matrix arithmetic rather than `zoom`, which letterboxes in headless
+mode. PyMOL's `get_view()[:9]` is the model→camera rotation stored
+**column-major**. The gros are rendered as downloaded (already `-pbc mol` on the
+cluster), with no re-wrapping.
 
 An earlier exploratory figure (`fig01_hmmm_vs_dopc.py` →
 `HMMM_equilibrium.*`, with its painter `draw_hmmm_equilibrium.py`) was

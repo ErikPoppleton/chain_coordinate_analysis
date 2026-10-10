@@ -6,7 +6,7 @@ offsets to these, so the reference must be each lipid's first atom in trajectory
 order.
 
   * CHARMM/SLipids: one residue per lipid -> the residue's first atom.
-  * AMBER (Lipid17): three residues per lipid (tail-head-tail); we group the
+  * AMBER (Lipid21): three residues per lipid (tail-head-tail); we group the
     lipid residues into consecutive triples in index order and take the first
     atom of each triple.  (Residue info is only used here to *build* the index;
     the toolkit itself reads only the xtc.)

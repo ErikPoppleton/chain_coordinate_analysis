@@ -75,7 +75,7 @@ def esc(resn):
 def gro_path(ff, lipid, which):
     """Input structure, preferring a residue-renumbered copy where one exists.
 
-    Raw Lipid17 gros number every residue 1, which PyMOL reads as one giant
+    Raw Lipid21 gros number every residue 1, which PyMOL reads as one giant
     residue; the ``*_renumbered.gro`` copies fix that where they were made."""
     stem = f"{ff}_{lipid}_" + ("last_conf" if which == "last" else "close")
     raw = SNAP / f"{stem}.gro"
@@ -121,7 +121,7 @@ def selections(ff, lipid):
     water = " or ".join(f"resn {r}" for r in sorted(WATER))
     ions = " or ".join(f"resn {esc(r)}" for r, _ in IONS)
     if scheme == "amber":
-        # Lipid17 splits each lipid into head + two identical tail residues,
+        # Lipid21 splits each lipid into head + two identical tail residues,
         # so the tails are a residue selection.
         lipids = f"resn {AMBER_HEAD[lipid]} or resn {AMBER_TAIL[lipid]}"
         tail = f"resn {AMBER_TAIL[lipid]}"

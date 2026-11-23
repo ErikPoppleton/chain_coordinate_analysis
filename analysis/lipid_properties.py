@@ -5,7 +5,7 @@ force-field / lipid / replicate, and save plot-ready arrays as .npz.
 This is the *analysis* half of the pipeline; styling lives in the separate
 ``plot_lipid_properties.py`` so the (slow) analysis need only run once.
 
-Run cluster-side in the ``lipid`` conda environment, which has lipyphilic +
+Run cluster-side in the ``lipid64`` conda environment, which has lipyphilic +
 MDAnalysis installed::
 
     conda run -n lipid64 python analysis/lipid_properties.py
@@ -28,14 +28,15 @@ Properties, one .npz written to ``data/`` per property:
   * lateral_diffusion-- MSD curve (vs lag time) + fitted diffusion coefficient
 
 The first three are histogram-ready pooled sample arrays.  order_parameter
-stores the full per-carbon S_CC array per replicate (large -- ~100 MB -- with
-the per-carbon averaging left to the plotting script), and lateral_diffusion
+stores the full per-carbon S_CC array per replicate (large -- ~100 MB; kept as
+raw data, nothing plots or tabulates it any more), and lateral_diffusion
 stores the MSD-vs-lagtime curve and the fitted D per replicate.
 
-For replicate 1 it also renders two AreaPerLipid.project_area() heatmaps per
-system directly to ``plots/lipprop_aplproj_{ff}_{lipid}_{avg,final}.png`` (APL
-projected onto the membrane plane: mean over the trajectory, and the final
-frame).
+For replicate 1 it also renders two upper-leaflet APL heatmaps per system
+(via ``lipyphilic.plotting.ProjectionPlot``) directly to
+``plots/lipprop_aplproj_{ff}_{lipid}_{avg,final}.png`` (APL projected onto the
+membrane plane: mean over the trajectory, and the final frame), plus the
+upper-leaflet phosphate-trajectory plot ``plots/lipprop_lipidtraj_{ff}_{lipid}.png``.
 
 S_CD (deuterium) order parameter via g_lomepro
 ----------------------------------------------
@@ -64,14 +65,14 @@ from pathlib import Path
 for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
     os.environ.setdefault(_v, "1")
 # Force a headless matplotlib backend before lipyphilic imports pyplot, so the
-# AreaPerLipid.project_area() figures render in worker processes without a display.
+# APL-projection / lipid-trajectory figures render in worker processes without a display.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import numpy as np
 
 # MDAnalysis + lipyphilic are only needed for the default (S_CC / npz) analysis.
-# The --lomepro path just shells out to the g_lomepro binary, so keep these
-# imports optional and error only if the lipyphilic path is actually taken.
+# The g_lomepro half just shells out to the binary, so keep these imports
+# optional and error only if the lipyphilic path is actually taken.
 try:
     import MDAnalysis as mda
     from MDAnalysis.transformations import NoJump
@@ -90,7 +91,7 @@ except ImportError as _exc:
 # area-per-lipid, thickness, registration and the MSD reference.
 from lipiddefs import (FORCEFIELDS, LIPIDS, REPS as REPLICATES,
                        PHOSPHATE_SEL as PHOSPHATE, TAIL_NC,
-                       AMBER_TAIL as AMBER_TAIL_RESN)
+                       AMBER_TAIL as AMBER_TAIL_RESN, base_lipid)
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -105,9 +106,10 @@ def tail_selections(ff, lipid):
     residue, so a single ``resname`` selection yields both chains (scc_profile
     then treats each residue as an independent chain)."""
     n = TAIL_NC[lipid]
+    resn = base_lipid(lipid)        # a condition label (DMPG_JC) keeps the DMPG resname
     if ff in ("charmm", "slipids"):
-        sn1 = f"resname {lipid} and name " + " ".join(f"C2{i}" for i in range(2, n + 1))
-        sn2 = f"resname {lipid} and name " + " ".join(f"C3{i}" for i in range(2, n + 1))
+        sn1 = f"resname {resn} and name " + " ".join(f"C2{i}" for i in range(2, n + 1))
+        sn2 = f"resname {resn} and name " + " ".join(f"C3{i}" for i in range(2, n + 1))
         return [sn1, sn2]
     # amber
     return [f"resname {AMBER_TAIL_RESN[lipid]} and name C1*"]
@@ -120,11 +122,11 @@ def scc_samples(u, ff, lipid):
     ``data`` has shape ``(n_chain_frames, n_carbons)`` -- the full distribution,
     pooled over both tails (rows are one chain at one frame).  S_CC of each C-C
     bond is ½⟨3cos²θ−1⟩ with the bilayer normal along z (lipyphilic's default);
-    the plotting script averages over the sample axis to get the profile, and
-    averaging that profile over carbons reproduces lipyphilic's per-chain SCC.
+    averaging over the sample axis gives the per-carbon profile, and averaging
+    that over carbons reproduces lipyphilic's per-chain SCC.
 
-    The full array is large (this is the ~100 MB file), but keeping every sample
-    lets the styling stage choose how to reduce it."""
+    The full array is large (this is the ~100 MB file); it is kept as raw data,
+    though nothing downstream plots or tabulates S_CC any more."""
     n = TAIL_NC[lipid]
     n_carbons = n - 1                    # tail carbons in the selection (acyl 2..n)
     carbons = np.arange(2, n)            # acyl number of each bond's first carbon
@@ -136,8 +138,8 @@ def scc_samples(u, ff, lipid):
             raise ValueError(
                 f"{ff} {lipid}: acyl-chain selection yields "
                 f"{sorted(set(int(c) for c in counts))} carbons per residue, "
-                f"expected {n_carbons}. A lipid's two tails are sharing a residue "
-                f"id (GROMACS numbers them identically), so MDAnalysis merges "
+                f"expected {n_carbons}. Adjacent tail residues (one lipid's sn-2, "
+                f"the next lipid's sn-1) share a residue id, so MDAnalysis merges "
                 f"them.  Renumber memb.gro so every tail is its own residue first."
             )
         m = tail.n_residues
@@ -311,7 +313,7 @@ def analyse(u, ff, lipid, rep):
     reg.run()
 
     # Order parameter: keep the full per-carbon S_CC for every chain and frame
-    # (the plotting stage averages to a profile).  scc_samples() also guards
+    # (raw data only -- nothing plots it any more).  scc_samples() also guards
     # against a topology that merges a lipid's two tails (see its docstring).
     scc_carbons, scc_data = scc_samples(u, ff, lipid)
 
@@ -341,7 +343,8 @@ def analyse(u, ff, lipid, rep):
     }
 
 
-# Properties saved as pooled 1-D sample arrays (histograms downstream).  Order
+# Properties saved as pooled sample arrays (histograms downstream; APL stays
+# 2-D (n_frames, n_lipids), the other two are 1-D per-frame).  Order
 # parameter and lateral diffusion are stored differently (see main()).
 SAMPLE_PROPS = ["area_per_lipid", "memb_thickness", "registration"]
 
@@ -378,7 +381,7 @@ def read_order_index(path, lipid):
     missing = [g for g in ("Membrane", "sn1", "sn2") if g not in counts]
     if missing:
         raise ValueError("missing group(s): " + ", ".join(missing))
-    if lipid not in TAIL_NC:
+    if base_lipid(lipid) not in TAIL_NC:
         raise ValueError(f"unknown lipid {lipid}")
     per_chain = TAIL_NC[lipid]
     nlip, rem = divmod(counts["sn1"], per_chain)
@@ -397,8 +400,9 @@ def run_lomepro(args):
 
     For each ``{ff}_{lipid}`` system this reads the pre-built order index
     ``{ff}_{lipid}/lomepro.ndx`` (generated separately by
-    ``make_order_index.py`` from a replicate's ``memb.gro`` -- serials must
-    match the waters-stripped ``inbox.xtc``; a system without one is skipped),
+    ``make_order_index.py`` from ``traj/{ff}_{lipid}.gro`` or a replicate's
+    ``memb.gro`` -- lipid serials must match the waters-stripped ``inbox.xtc``,
+    which they do for both; a system without one is skipped),
     then per replicate creates a fresh ``eq{rep}/lomepro/`` (overwriting any
     previous one) and runs, from the ``eq{rep}`` directory::
 
@@ -449,7 +453,7 @@ def run_lomepro(args):
             ndx = system_dir / "lomepro.ndx"
             if not ndx.exists():
                 print(f"skip {ff}_{lipid}: {ndx} not found -- build it with "
-                      f"analysis/make_order_index.py from a replicate's memb.gro "
+                      f"analysis/make_order_index.py (from traj/{ff}_{lipid}.gro) "
                       f"and copy it to {system_dir}/lomepro.ndx")
                 continue
             try:
@@ -492,7 +496,8 @@ def run_lomepro(args):
                     print(f"  eq{rep}: wrote {lome}/scd.out_AVG_sn*.dat")
                     # Copy the per-chain S_CD profiles into data/ for plot_scd(),
                     # keyed by replicate so each run is kept (plot_scd globs all
-                    # {ff}_{lipid}_*scd_sn*.dat and treats each as one sample).
+                    # {ff}_{lipid}_*scd_sn*.dat, averages the two tails within a
+                    # replicate and treats each replicate as one sample).
                     for sn in ("sn1", "sn2"):
                         src = lome / f"scd.out_AVG_{sn}.dat"
                         dst = DATA / f"{ff}_{lipid}_{rep}_scd_{sn}.dat"

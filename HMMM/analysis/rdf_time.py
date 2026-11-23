@@ -21,7 +21,7 @@ Why the cutoff is 1 nm here, not rdf.py's 2 nm
 ----------------------------------------------
 The first peak sits at ~0.5 nm, so a 1 nm range covers it and the first
 minimum with room to spare.  It also matters for correctness: minimum image
-needs ``r_max <= L/2``, and the collapsed CHARMM NPT boxes shrink to ~2.2 nm
+needs ``r_max <= L/2``, and the collapsed CHARMM NPT boxes shrink to ~2.2-2.3 nm
 laterally -- a 2 nm cutoff would have to discard exactly the frames this
 diagnostic exists to look at, while 1 nm keeps them.  Frames that still violate
 the bound are skipped and counted, never silently used.

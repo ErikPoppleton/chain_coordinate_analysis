@@ -91,7 +91,7 @@ def main():
     for (ff, lipid), vals in by.items():
         summary["%s_%s" % (ff, lipid)] = {
             "tilt_kt_per_nm2": st.fmean(vals),
-            "sd_kt_per_nm2": st.pstdev(vals) if len(vals) > 1 else 0.0,
+            "sd_kt_per_nm2": st.stdev(vals) if len(vals) > 1 else 0.0,
             "n_rep": len(vals)}
     with open(DATA / "lipidator_moduli_summary.json", "w") as fh:
         json.dump(summary, fh, indent=2, sort_keys=True)

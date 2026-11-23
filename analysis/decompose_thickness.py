@@ -28,6 +28,10 @@ Reported:
     python3 analysis/decompose_thickness.py    # numpy + matplotlib
 
 Reads data/core_thickness.npz.  Writes plots/thickness_decomposition.png.
+
+Note: the committed SI figure is deliberately kept on the pre-potassium-rebuild
+(old ion mix) data, and core_thickness.npz now holds the rebuilt DMPG series,
+so re-running this script would silently replace that figure (see CLAUDE.md).
 """
 
 from pathlib import Path

@@ -4,11 +4,12 @@ field / lipid, for a ``gmx density`` mass-density profile of the membrane core.
 
 This feeds the *second* d_HC (hydrophobic-core thickness) metric: the tail mass
 density profile is a slab centred on the bilayer mid-plane, and d_HC is taken as
-the **width of that profile at a density threshold of 500 kg/m^3** (last 50 ns of
-the equilibration, per the reference method).  ``gmx density -dens mass`` reads
+the **width of that profile at a density threshold of 500 kg/m^3**, taken over the
+whole trajectory.  ``gmx density`` (mass density by default) reads
 the masses from the ``.tpr`` and the atom list from this ``.ndx``.
 
-Writes ``data/tail_{ff}_{lipid}.ndx`` with two groups:
+Writes ``data/tail_{ff}_{lipid}.ndx`` (``{lipid}`` is the gro's own label, e.g.
+``DMPG_JC`` for ``traj/amber_DMPG_JC.gro``) with two groups:
   * ``tails``    -- every aliphatic acyl-chain atom of both chains **plus their
                     hydrogens** (all-atom, so the kg/m^3 scale matches an all-atom
                     tail density and the 500 kg/m^3 threshold is meaningful).  The
@@ -49,7 +50,7 @@ import MDAnalysis as mda
 from MDAnalysis.selections.gromacs import SelectionWriter
 
 from make_density_index import detect
-from lipiddefs import TAIL_NC, AMBER_TAIL, lipid_resnames
+from lipiddefs import TAIL_NC, AMBER_TAIL, lipid_resnames, label_from_path
 
 ROOT = Path(__file__).resolve().parent.parent
 TRAJ = ROOT / "traj"
@@ -94,29 +95,29 @@ def process(gro):
         sys.exit(f"{gro.name}: no tail atoms selected (check naming)")
 
     DATA.mkdir(parents=True, exist_ok=True)
-    out = DATA / f"tail_{ff}_{lipid}.ndx"
+    _, label = label_from_path(gro, lipid, ff) or (ff, lipid)
+    out = DATA / f"tail_{ff}_{label}.ndx"
     with SelectionWriter(str(out), mode="w") as ndx:
         ndx.write(tails, name="tails")
         ndx.write(memb, name="Membrane")
 
     n_lip = memb.n_residues if scheme == "single" else memb.n_residues // 3
     per_lip = tails.n_atoms / n_lip if n_lip else float("nan")
-    print(f"{ff}_{lipid}: {tails.n_atoms} tail atoms "
+    print(f"{ff}_{label}: {tails.n_atoms} tail atoms "
           f"({per_lip:.0f}/lipid over ~{n_lip} lipids), "
           f"{memb.n_atoms} membrane atoms -> {out.name}")
     return ff, lipid
 
 
 def print_gmx_hint(systems):
-    print("\nRun gmx density cluster-side (last 50 ns, mass density, kg/m^3),")
-    print("centering on the membrane and outputting the tail slab; d_HC is then")
-    print("the width of the profile at 500 kg/m^3:\n")
-    print("  # per system {ff}_{lipid}, per replicate rep in 1 2 3:")
-    print("  #   t0 = (trajectory end in ps) - 50000")
-    print('  echo "Membrane tails" | gmx density \\')
-    print("      -f traj/{ff}_{lipid}${rep}.xtc -s traj/{ff}_{lipid}.tpr \\")
-    print("      -n data/tail_{ff}_{lipid}.ndx -dens mass -center -symm \\")
-    print("      -sl 200 -b ${t0} -o data/{ff}_{lipid}_${rep}_taildens.xvg")
+    print("\nRun gmx density cluster-side over the whole trajectory (mass density,")
+    print("the default -dens, in kg/m^3), centering on the membrane and outputting")
+    print("the tail slab; d_HC is then the width of the profile at 500 kg/m^3:\n")
+    print("  # per system {ff}_{lipid}, in each eq{rep}/ dir:")
+    print('  echo "Membrane tails" | gmx density -s md.tpr -f full.xtc \\')
+    print("      -n ../tail.ndx -center -o taildens.xvg")
+    print("  # (tail.ndx = data/tail_{ff}_{lipid}.ndx; download each as")
+    print("  #  data/{ff}_{lipid}_${rep}_taildens.xvg)")
     print("\nThen `python3 analysis/plot_core_thickness.py` parses the .xvg "
           "(width @ 500 kg/m^3) and compares it to the lipyphilic metric.")
 

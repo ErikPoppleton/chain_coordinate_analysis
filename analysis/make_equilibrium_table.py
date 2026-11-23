@@ -6,9 +6,8 @@ bulk properties and the Lipidator/ReSiS tilt modulus -- plus one pore column:
 the **pore-formation barrier Delta G** from the chain-coordinate PMF, exactly the
 value Figure 2 plots (``draw_pore_energy.barrier()``, basin to pore-side peak).
 The other pore branches (cylindrical density maps, closure trajectories) are
-excluded.  ``collect()`` still returns the g_lomepro ``<-S_CD>`` and the
-ost_pymodules ``chi`` (the vs-barrier figures plot them), but neither is
-tabulated any more.
+excluded.  ``collect()`` still returns the ost_pymodules ``chi`` (the
+vs-barrier figures plot it), but it is not tabulated.
 
 Error scheme (per column, by what data is available):
   * The **per-frame lipyphilic observables** (APL, d_HH, d_HC) carry a
@@ -26,21 +25,22 @@ Error scheme (per column, by what data is available):
     block-averaged within-run SEM (``chi_block_sem`` in ``tilt_moduli.json``,
     ``kappa_block_sem`` in ``lipidator_blocks.json``), combined with the
     replicate spread the same ``max(between^2, within^2)`` way.
-  * **D and <-S_CD>** keep ``mean +/- SD`` across the three replicate scalars --
-    a single fitted scalar / profile per run, with no within-run error series.
-  * **Delta G** is the full 100 ns profile's barrier +/- the SD of the same
-    barrier over the five consecutive 20 ns partial profiles -- a convergence
-    spread (one PMF per system, no replicates).
+  * **D** keeps ``mean +/- SD`` (sample SD) across the three replicate scalars --
+    a single fitted scalar per run, with no within-run error series.
+  * **Delta G** is the full profile's barrier +/- the SD of the same barrier
+    over the five consecutive partial profiles -- a convergence spread (one PMF
+    per system, no replicates).  The full PMFs are 50 ns with 10 ns partials,
+    except DMPC (all three force fields): 100 ns with 20 ns partials (read from
+    the ``gmx wham -b/-e`` flags in the partial-profile headers).
 
 Inputs (all in ``data/``):
   * ``lipprops_area_per_lipid.npz``   -- APL  (per-rep key ``{ff}_{lipid}_eq{n}``, 2-D frames x lipids)
   * ``lipprops_memb_thickness.npz``   -- P-P thickness d_HH (per-rep, 1-D per frame, Angstrom)
   * ``core_thickness.npz``            -- d_HC, lipyphilic key ``{ff}_{lipid}_lipy_rep{n}`` (nm; optional)
-  * ``lipprops_registration.npz``     -- inter-leaflet registration (per-rep, 1-D per frame)
   * ``lipprops_lateral_diffusion.npz``-- fitted D, key ``{ff}_{lipid}_D`` (3 reps, cm^2/s)
-  * ``{ff}_{lipid}_{rep}_scd_sn{1,2}.dat`` -- g_lomepro -S_CD (col2 = mean, col3 = SD-over-lipids)
-  * ``tilt_moduli_summary.json``      -- ost_pymodules chi (kJ/mol/rad^2)
-  * ``lipidator_moduli_summary.json`` -- Lipidator kappa_theta (kJ/mol/nm^2)
+  * ``tilt_moduli.json``              -- ost_pymodules chi per rep (``chi_kT`` + ``chi_block_sem``, k_BT/rad^2)
+  * ``lipidator_blocks.json``         -- Lipidator kappa_theta per rep (``kappa_full`` + ``kappa_block_sem``, k_BT/nm^2; optional)
+  * ``equilibrium_timeseries_stats.json`` -- per-rep pymbar t0 from ``stats.py`` (optional, but run it first)
   * ``{ff}_{lipid}_profile.xvg`` + ``_part{1..5}_profile.xvg`` -- gmx wham PMFs (Delta G)
 
 Writes ``data/equilibrium_summary_table.tex`` (drop-in; needs
@@ -114,16 +114,15 @@ def t0_reps(t0map, col, ff, lipid):
 
 
 def summarise_reps(per_rep):
-    """[scalar per rep] -> (mean, population SD) or None if empty.
+    """[scalar per rep] -> (mean, sample SD, ddof=1) or None if empty.
 
-    Retained for the *fitted* quantities (D, <-S_CD>, chi, kappa) that have no
-    per-frame series for the autocorrelation-aware CI -- their error stays the
-    SD across replicates (chi/kappa additionally have block SEMs available in
-    their per-rep JSONs once the tilt/lipidator block runs complete)."""
+    Used for the *fitted* quantity D, which has no within-run error series --
+    its error stays the SD across replicates.  (chi/kappa
+    now go through ``moduli_ci`` with their block SEMs instead.)"""
     vals = [v for v in per_rep if v is not None and np.isfinite(v)]
     if not vals:
         return None
-    return float(np.mean(vals)), float(np.std(vals, ddof=0))
+    return float(np.mean(vals)), float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
 
 
 def rep_scalar_from_npz(npz, ff, lipid, reduce):
@@ -132,22 +131,6 @@ def rep_scalar_from_npz(npz, ff, lipid, reduce):
     for n in REPS:
         key = "%s_%s_eq%d" % (ff, lipid, n)
         out.append(reduce(npz[key]) if key in npz.files else None)
-    return out
-
-
-def scd_rep_scalars(ff, lipid):
-    """Chain-averaged -S_CD per rep, pooling both tails (col 2 of each .dat)."""
-    out = []
-    for n in REPS:
-        vals = []
-        for sn in (1, 2):
-            f = DATA / ("%s_%s_%d_scd_sn%d.dat" % (ff, lipid, n, sn))
-            if f.exists():
-                arr = np.loadtxt(f)
-                if arr.ndim == 1:
-                    arr = arr[None, :]
-                vals.append(arr[:, 1])            # col 2 = mean -S_CD per carbon
-        out.append(float(np.concatenate(vals).mean()) if vals else None)
     return out
 
 
@@ -160,6 +143,12 @@ def moduli_ci(perrep, ff, lipid, val_key, sem_key):
     k_BT units -> * RT).  Combines the per-rep block SEMs (within-run) with the
     replicate spread (between-run) via ``autocorr.hierarchical_ci_from_estimates``
     -- the same estimator the per-frame observables use.  Returns None if absent."""
+    r = _moduli_full(perrep, ff, lipid, val_key, sem_key)
+    return (r["mean"], r["ci_half"]) if r else None
+
+
+def _moduli_full(perrep, ff, lipid, val_key, sem_key):
+    """The full ``hierarchical_ci_from_estimates`` dict behind ``moduli_ci``."""
     if perrep is None:
         return None
     means, sems, neffs = [], [], []
@@ -172,12 +161,11 @@ def moduli_ci(perrep, ff, lipid, val_key, sem_key):
         s = rec.get(sem_key)
         sems.append(s * RT_310 if s is not None else float("nan"))
         neffs.append(rec.get("n_blocks"))
-    r = autocorr.hierarchical_ci_from_estimates(means, sems, neffs)
-    return (r["mean"], r["ci_half"]) if r else None
+    return autocorr.hierarchical_ci_from_estimates(means, sems, neffs)
 
 
 def pore_barrier(ff, lipid):
-    """(Delta G, SD over the five 20 ns partials) in kJ/mol, or None.
+    """(Delta G, SD over the five partial profiles) in kJ/mol, or None.
 
     Imported lazily: ``draw_pore_energy`` itself imports this module (for
     ``collect()``), so a top-level import would be circular."""
@@ -208,6 +196,49 @@ def load():
     return npz, tiltrep, lipblk, ct
 
 
+def regimes():
+    """``{(ff, lipid, col): {"regime", "ratio"}}`` for the hierarchical-CI
+    columns.  ``regime`` says whether
+    each cell's CI ended up ``"pooled"`` (replicates agree within their own
+    sampling noise, so the frames are pooled: SE = within_sem / sqrt(n), t on
+    the summed N_eff dof) or ``"between-run"`` (the replicate spread dominates:
+    SE = between_sd / sqrt(n), t on n - 1 = 2 dof, i.e. the three replicate
+    means are the samples).  ``ratio`` is the diagnostic behind it,
+    ``between_sd / within_sem``: the SD of the replicate means over the RMS of
+    their within-run SEMs, so the regime is ``between-run`` exactly when it is
+    >= 1.  Computed with exactly the inputs ``collect()`` uses; read by the SI
+    equilibration table.
+    """
+    npz, tiltrep, lipblk, ct = load()
+    t0map = load_t0map()
+    specs = {
+        "apl": (npz["area_per_lipid"], "%s_%s_eq%d", lambda a: a.mean(axis=1)),
+        "thick": (npz["memb_thickness"], "%s_%s_eq%d",
+                  lambda a: a.astype(float) / 10.0),
+        "dhc": (ct, "%s_%s_lipy_rep%d", lambda a: a.astype(float)),
+    }
+    out = {}
+    for ff, _ in FORCEFIELDS:
+        for lipid in LIPIDS:
+            for col, (src, tmpl, tr) in specs.items():
+                if src is None:
+                    continue
+                r = autocorr.hierarchical_ci(series_reps(src, tmpl, ff, lipid, tr),
+                                             t0s=t0_reps(t0map, col, ff, lipid))
+                if r:
+                    out[(ff, lipid, col)] = _regime_entry(r)
+            r = _moduli_full(lipblk, ff, lipid, "kappa_full", "kappa_block_sem")
+            if r:
+                out[(ff, lipid, "kappa")] = _regime_entry(r)
+    return out
+
+
+def _regime_entry(r):
+    ratio = (r["between_sd"] / r["within_sem"] if r["within_sem"] > 0
+             else float("inf"))
+    return {"regime": r["regime"], "ratio": ratio}
+
+
 def collect():
     npz, tiltrep, lipblk, ct = load()
     t0map = load_t0map()          # pymbar equilibration cutoffs (per obs/system/rep)
@@ -236,7 +267,6 @@ def collect():
             cell["diff"] = (summarise_reps([v * 1e8 for v in npz["lateral_diffusion"][dkey]])
                             if dkey in npz["lateral_diffusion"].files else None)  # cm^2/s -> um^2/s
             # --- g_lomepro ---
-            cell["scd"] = summarise_reps(scd_rep_scalars(ff, lipid))
             # --- tilt moduli: hierarchical CI from per-rep value + block SEM ---
             cell["chi"] = moduli_ci(tiltrep, ff, lipid, "chi_kT", "chi_block_sem")
             cell["kappa"] = moduli_ci(lipblk, ff, lipid, "kappa_full", "kappa_block_sem")
@@ -255,8 +285,6 @@ COLS = [
     ("thick", r"$d_{\mathrm{HH}}$", "nm",                            2),
     ("dhc",   r"$d_{\mathrm{HC}}$", "nm",                            2),
     ("diff",  r"$D$",            r"µm$^2$\,s$^{-1}$",                 1),
-    # The g_lomepro <-S_CD> is still computed (collect() returns it, and
-    # plot_property_vs_barrier.py plots it) but is no longer tabulated.
     # The ost_pymodules per-lipid chi is still computed (collect() returns it,
     # and the vs-barrier figures plot it) but is no longer tabulated: the two
     # tilt moduli measure the same thing, so the table carries only the
@@ -375,8 +403,9 @@ def build_latex(rows):
                  "(Lipidator/ReSiS; experimental values converted from mN\\,m$^{-1}$); "
                  "$\\Delta G_{\\mathrm{pore}}$: pore-formation barrier, from the "
                  "chain-coordinate PMF basin to the highest point on its pore side "
-                 "(one $100$\\,ns umbrella-sampling PMF per system; $\\pm$ is the SD of the "
-                 "same barrier over five consecutive $20$\\,ns sub-windows). "
+                 "(one $50$\\,ns umbrella-sampling PMF per system, $100$\\,ns for DMPC; "
+                 "$\\pm$ is the SD of the same barrier over five consecutive $10$\\,ns "
+                 "sub-windows, $20$\\,ns for DMPC). "
                  "Simulations: $T=310$\\,K. Except where indicated, experimental values "
                  "are for $T= 30^{\\circ}$\\,C ($303.15$\\,K)}")
     lines.append("\\label{tab:equilibrium_properties}")

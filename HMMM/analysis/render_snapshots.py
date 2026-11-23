@@ -184,9 +184,12 @@ def _prepare(stem, out):
     visible in ``charmm_npat``, where a couple of lipids had walked past the y
     face.
 
-    So the system is translated along z and then wrapped by whole molecules (one
-    residue per molecule, which is exactly what ``topology.topology_for``
-    guarantees, including for AMBER).  **Where to put the periodic cut** is
+    So the system is translated along z and then wrapped by whole molecules.
+    Residues are *not* molecules for AMBER -- a Lipid21 lipid is ``VL``-``PC``-
+    ``VL``, and MDAnalysis merges the adjacent tails of neighbouring lipids into
+    one residue -- so wrapping by residue split 2-11 lipids per frame across the
+    box.  The lipid molecules are therefore found from guessed bonds (every
+    other residue -- water, DCLE, ions -- is one molecule).  **Where to put the periodic cut** is
     chosen from the data rather than assumed: the lipid-atom z histogram's
     emptiest slice is moved to the box edge.  For an intact bilayer that is the
     gap between periodic images, so the membrane ends up centred -- the same
@@ -198,6 +201,7 @@ def _prepare(stem, out):
     Needs MDAnalysis, so it is imported here rather than at module scope: the
     result is cached and the rest of the script is stdlib + PyMOL only.
     """
+    import warnings
     import numpy as np
     import MDAnalysis as mda
     sys.path.insert(0, str(HERE))
@@ -210,11 +214,12 @@ def _prepare(stem, out):
     u = mda.Universe(str(topology_for(gro, quiet=True)))
     box = np.asarray(u.dimensions[:3], dtype=float)
 
-    # A run that ended in a pressure-coupling failure has a box that no longer
-    # describes its own contents (charmm_npt1 finishes at 2.3 x 2.3 x 275 nm
-    # around a system still ~100 nm across).  Wrapping into that box would mince
-    # the configuration, so leave those coordinates exactly as GROMACS wrote
-    # them and say so.
+    # Guard against a box that no longer describes its own contents (atoms
+    # spread over more than twice the box along any axis).  Wrapping into such
+    # a box would mince the configuration, so leave those coordinates exactly
+    # as GROMACS wrote them and say so.  (The collapsed CHARMM NPT runs do *not*
+    # trip it: charmm_npt1's atoms span ~3.9 x 3.8 x 272 nm in a 2.3 x 2.3 x
+    # 275 nm box, so they are wrapped like every other run.)
     extent = u.atoms.positions.max(axis=0) - u.atoms.positions.min(axis=0)
     if np.any(extent > 2.0 * box):
         print("  ! %s: box %s nm does not contain its own extent %s nm "
@@ -233,7 +238,13 @@ def _prepare(stem, out):
                                      range=(0.0, lz))
         cut = 0.5 * (edges[counts.argmin()] + edges[counts.argmin() + 1])
         u.atoms.translate([0.0, 0.0, -cut])
-        u.atoms.wrap(compound="residues", inplace=True)
+        # Whole lipids from guessed bonds (the -pbc mol input keeps them whole);
+        # everything else wraps per residue.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")          # vdW-radius guess chatter
+            lipids.guess_bonds()
+        lipids.wrap(compound="fragments", inplace=True)
+        (u.atoms - lipids).wrap(compound="residues", inplace=True)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     u.atoms.write(str(out))

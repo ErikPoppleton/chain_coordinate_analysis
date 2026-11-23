@@ -90,6 +90,6 @@ pull-coord1-origin       = 0.0 0.0 0.0
 pull-coord1-vec          = 0.0 0.0 0.0
 pull-coord1-start        = no
 pull-coord1-init         = 0.20               ; Pulling from xi[chi] = 0.20
-pull-coord1-rate         = 0.000016           ; up to xi[ch] = 1.0 within 5000ps 
+pull-coord1-rate         = 0.000016           ; up to xi[ch] = 1.0 within 50000 ps
 pull-coord1-k            = 5000               ; Force constant, unit kJ/mol (not kJ/mol/nm2, since xi[ch] is unit-less)
 pull-coord1-kB           = 0

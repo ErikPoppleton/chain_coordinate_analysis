@@ -27,12 +27,12 @@ Two things about the normalisation
 ----------------------------------
 *The plateau is not 1.*  MDAnalysis normalises g(r) against the **box-average**
 number density, and DCLE is confined to the bilayer core -- roughly a third of
-the box -- so its local density is ~3x the box average and the curves level off
-near 1.7 rather than 1.  Peak *positions* are unaffected; peak *heights* are
+the box -- so its local density is a few times the box average and the curves
+level off near 1.5-2 rather than 1.  Peak *positions* are unaffected; peak *heights* are
 scaled by that factor, so compare heights between systems, not against 1.  The
 large-r plateau is stored per curve (``*_plateau``) so a plot can divide it out,
-and the raw histogram counts are stored so any other normalisation can be
-rebuilt.
+and the running coordination number (``*_cn``, the cumulative pair count per
+reference atom) is stored as a normalisation-free alternative.
 
 *Only the stable window is used.*  Each run is cut at its stability time
 (``stability.py``) before anything is binned: the solvent structure of a

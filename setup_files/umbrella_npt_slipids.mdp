@@ -15,7 +15,7 @@ compressed-x-grps    = System    ; save the whole system
 
 ; Bonded parameters
 constraint_algorithm = lincs     ; holonomic constraints 
-constraints          = h-bonds ; for relaxation, constrain everything
+constraints          = h-bonds   ; bonds involving H are constrained
 lincs_iter           = 1         ; accuracy of LINCS
 lincs_order          = 4         ; also related to accuracy
 

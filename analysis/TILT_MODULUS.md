@@ -153,9 +153,7 @@ whole-run fit.
 The library function `AnalyzeLipidTiltAndSplay` is **not** used: its splay step
 has a bug (an unguarded `GetBoolProp('')`). `tilt_modulus.py` calls the
 library's tilt pieces directly instead (`GetBoundaryBetweenViews` →
-`AssignNormalsToLipids` → `AnalyzeLipidTilts` → `FitTiltDistribution`). Note
-that `tilt_modulus.py`'s own docstring still describes the old route and a
-phosphate-only head; the code is as described here.
+`AssignNormalsToLipids` → `AnalyzeLipidTilts` → `FitTiltDistribution`).
 
 ### Batch driver: every system × replicate
 
@@ -200,9 +198,9 @@ PYTHONNOUSERSITE=1 conda run -n lipid64 python analysis/make_director.py --check
 PYTHONNOUSERSITE=1 conda run -n lipid64 python analysis/make_director.py
 ```
 
-- The first command checks that the recipe reproduces the shipped CHARMM
-  library's DMPC/DOPC offsets. It aborts if not.
-- The second appends the entries the shipped libraries lack (CHARMM DMPG;
+- The first command only checks that the recipe reproduces the shipped CHARMM
+  library's DMPC/DOPC offsets, and writes nothing.
+- The second repeats that check (and aborts if it fails), then appends the entries the shipped libraries lack (CHARMM DMPG;
   SLipids DOPC/DMPC/DMPG) and writes `amber.ldx` for all three lipids, into
   `~/software/lipidator-toolkit/directors/`. It is idempotent.
 
@@ -348,7 +346,9 @@ Comparison of all three methods on the same trajectories:
 
 The two results should satisfy κ_θ ≈ χ / A_lipid, with A_lipid in nm² from the
 same run (`apl_A2 / 100`). For example, CHARMM DMPC rep 1 gives χ = 13.1 k_BT/rad²
-at A = 0.604 nm², so χ/A = 21.7 k_BT/nm², against ReSiS κ_θ = 20.5 k_BT/nm².
+at A = 0.604 nm², so χ/A = 21.7 k_BT/nm², against ReSiS κ_θ = 20.5 k_BT/nm²
+(the stored `lipidator_moduli.json`; the later rerun in the table below gives
+20.9 k_BT/nm² = 53.9 kJ mol⁻¹ nm⁻²).
 Agreement to about 10 % is the expected level. A κ_θ near **2×** χ/A almost always means a duplicated director block
 (section 2, step 1).
 

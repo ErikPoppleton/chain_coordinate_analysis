@@ -29,15 +29,17 @@ HMMM/plots/final/                       production figures
 # 1. compute (lipyphilic + MDAnalysis) -> HMMM/data/lipprops_*.npz, box.npz
 PYTHONNOUSERSITE=1 conda run -n lipid64 python HMMM/analysis/lipid_properties.py --nprocs 6
 
-# 2. equilibration / autocorrelation (needs pymbar, which lives in base)
-PYTHONNOUSERSITE=1 conda run -n base python HMMM/analysis/stats.py
-
-# 3. stability: per-frame lateral SD of d_HH, then the stability time
+# 2. stability: per-frame lateral SD of d_HH, then the stability time
 PYTHONNOUSERSITE=1 conda run -n lipid64 python HMMM/analysis/thickness_variation.py --nprocs 6
 PYTHONNOUSERSITE=1 conda run -n base    python HMMM/analysis/stability.py
 
-# 4. equilibration stats -- AFTER stability.py, which it truncates on
+# 3. equilibration / autocorrelation (needs pymbar, which lives in base) --
+#    AFTER stability.py, whose stable windows it truncates on
 PYTHONNOUSERSITE=1 conda run -n base python HMMM/analysis/stats.py
+
+# 4. (diagnostic, optional) RDF first peak over the whole run -> plots/rdf_peak_time.png
+PYTHONNOUSERSITE=1 conda run -n lipid64 python HMMM/analysis/rdf_time.py --nprocs 6
+python3 HMMM/analysis/plot_rdf_time.py
 
 # 5. diffusion (lipid + DCLE) and solvent RDFs, both over the stable window
 PYTHONNOUSERSITE=1 conda run -n lipid64 python HMMM/analysis/diffusion.py --nprocs 6
@@ -63,9 +65,11 @@ everything downstream.
 `PYTHONNOUSERSITE=1` is not optional on this machine — a stray `~/.local`
 scipy shadows the env's and breaks the MDAnalysis import.
 
-Each step takes a `--forcefields` / `--ensembles` / `--reps` subset; step 1
-**updates** the `.npz` files in place rather than rewriting them, so running it
-for SLipids alone later will not clobber the CHARMM/AMBER results.
+The trajectory-reading steps (`lipid_properties.py`, `thickness_variation.py`,
+`diffusion.py`, `rdf.py`, `rdf_time.py`) take a `--forcefields` / `--ensembles` /
+`--reps` subset and **update** their `.npz` files in place rather than rewriting
+them, so running one for SLipids alone later will not clobber the CHARMM/AMBER
+results. `stability.py` and `stats.py` always process everything present.
 
 ## Modules
 
@@ -96,14 +100,17 @@ two branches use one colour scheme, one house figure style and one error model.
 ## Things that bit, and how they are handled
 
 **AMBER numbers every lipid residue `1`.**  Lipid21 lays a lipid out
-tail–head–tail (`VL`–`PC`–`VL`) with a shared resid, so MDAnalysis merges the
-entire 17 920-atom lipid block into a couple of giant residues.  That is fatal
-rather than untidy: every lipyphilic analysis sizes its output by
-`membrane.n_residues` and indexes leaflets with `membrane.residues[...]`, so a
-256-phosphate selection would describe *one* lipid.  `topology.py` writes a
-renumbered copy (one resid per molecule, boundaries found by resname change *or
-repeated atom name*) into `data/topol/` and uses that as the topology; the
-downloaded `traj/` files are never modified.
+tail–head–tail (`VL`–`PC`–`VL`) with a shared resid.  MDAnalysis (2.10) still
+starts a new residue at every resname change, so each `PC` head is its own
+residue, but adjacent `VL` tails of neighbouring lipids merge (513 lipid
+residues: 256 `PC` + 257 `VL`).  Every lipyphilic analysis sizes its output by
+`membrane.n_residues` and indexes leaflets with `membrane.residues[...]`, so
+what matters is one *phosphate* per residue — which the downloaded AMBER files
+already give, so `topology.topology_for` uses them unchanged (no
+`data/topol/` copy is currently written).  Only if the phosphates span fewer
+residues than there are phosphates does it write a renumbered copy (one resid
+per molecule, boundaries found by resname change *or repeated atom name*) into
+`data/topol/`; the downloaded `traj/` files are never modified.
 
 **Two CHARMM NPT runs fail.**  `charmm_npt1` (790 frames) and `charmm_npt3`
 (891 frames) hit a pressure-coupling failure: the box contracts laterally and
@@ -117,12 +124,12 @@ full per-frame box trace of every run is kept in `data/box.npz`.
 
 **NPAT fixes the lateral area by construction.**  The per-frame *mean* APL of an
 NPAT run is therefore a constant, and the three replicates agree to ~1e-14 Å².
-The box degenerates to a line and a significance test would return p ≈ 0 for a
-difference that was imposed, not measured — so a group with a numerically zero
-hierarchical standard error gets no bracket, and says so in the printed table.
+The box degenerates to a line, and a significance test would return p ≈ 0 for a
+difference that was imposed, not measured — which is one reason the properties
+figure draws no significance brackets at all.
 
 **The reference lipid is arguably the wrong one.**  These HMMMs were built to
-reproduce **DOPC's thickness**, which `d_HH` (panel b) duly checks.  APL and `D`
+reproduce **DOPC's thickness**, which `d_HH` (Figure 2 panel b) duly checks.  APL and `D`
 are *not* expected to match DOPC and would be better judged against a **DSPC**
 bilayer, whose headgroup packing the HMMM construction preserves.  No DSPC data
 exists in this repository, so the figure carries DOPC and the caption has to
@@ -134,7 +141,14 @@ carry the caveat.
   8 atoms, carbons `C1`/`C2`, chlorines `CL11`,`CL12` (CHARMM) or `CL3`,`CL4`.
   There is **no water and no ions** in these systems.
 * Lipid residues: CHARMM one residue still named `DOPC` (SLipids `DVPC`); AMBER head `PC`
-  + two `VL` (valeroyl) tails.
+  + two `VL` (valeroyl) tails.  The CHARMM residue keeps the name `DOPC` because
+  the CHARMM-GUI HMMM builder asks for the lipid whose bilayer thickness to
+  match, and DOPC was chosen.
+* **Naming vs chemistry:** `DVPC`/`VL` ("di-valeroyl", 5:0) is the name from the
+  original HMMM paper (CHARMM), and is kept here.  The chains in these files
+  actually have **6 carbons counting the carbonyl** in all three force fields
+  (CHARMM `C21`–`C25` + `C2T`; AMBER `C11` in `PC` + `C12`–`C16` in `VL`), i.e.
+  hexanoyl (6:0) by carbon count.
 * Chains are 6 carbons counting the carbonyl.  **CHARMM terminates them
   `C2T`/`C3T`, SLipids `C26`/`C36`** — a selection keyed on either spelling alone
   silently selects nothing for the other force field.  `chain_atom_names`
@@ -171,7 +185,8 @@ default) subsamples frames, which a smooth ensemble average tolerates easily.
 - **Collapsed frames are dropped, and only those.** Minimum image needs
   `r_max ≤ L/2`; the two failed CHARMM NPT runs contract to a 2.3 nm box where a
   2 nm cutoff is not computable. Those frames are skipped and counted in the
-  output — a correctness bound, not a judgement about the data.
+  output — a correctness bound, not a judgement about the data. (They all lie
+  past the stability time, so with the default truncation the count is 0.)
 
 ## Snapshots (`render_snapshots.py`)
 
@@ -227,11 +242,12 @@ an order of magnitude long before the *mean* thickness looks wrong.
 **Stability time** = the first frame at which the 25 ns rolling mean of that SD
 exceeds **1.0 nm**; a run that never crosses is stable for its whole
 trajectory. The threshold sits in the gap between the runs that hold together
-(plateaux at 0.17 / 0.35 / 0.55–0.75 nm, no step) and the two that do not
+(plateaux at ~0.2 nm for posres, ~0.45 nm for AMBER NPAT and 0.55–0.65 nm
+for the other NPT/NPAT runs, no step) and the two that do not
 (clean steps out of their plateau to 1.0–1.6 and to 20 nm), and it reproduces
 the by-eye classification of every run. `stability.py` also prints the
 *relative* rule (2× each run's own first-100 ns plateau) as a cross-check; for
-CHARMM and AMBER the two agree to 15–40 ns. **It is useless for SLipids
+the three CHARMM runs that break, the two agree to 13–36 ns. **It is useless for SLipids
 NPT/NPAT**, which break up *inside* the 100 ns baseline window: the baseline is
 itself already >1 nm, so the relative rule reports 111–1001 ns for runs whose
 final frames are plainly not bilayers. Trust the absolute rule there.
@@ -291,7 +307,7 @@ bars (panel c) are not hatched (removed 2026-10-10), since the bar heights
 themselves show which systems fell short.
 
 **NPAT fixes the lateral area by construction**, so its per-frame mean APL is a
-constant and its box in panel c degenerates to a line. That is not a plotting
+constant and its box in Figure 2 panel c degenerates to a line. That is not a plotting
 bug.
 
 **SI galleries** (`figSI_snapshots.py`): one figure per force field, 3×3 at

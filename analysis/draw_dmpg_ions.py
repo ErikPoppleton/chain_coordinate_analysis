@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Painters for the DMPG ion-condition SI figure (K+ Aqvist vs Na+ Joung-Cheetham).
+"""Painters for the DMPG ion-condition SI figure (K+ Aqvist vs Na+ Joung-Cheatham).
 
 Background: the AMBER Lipid21 paper reports that anionic lipids over-order and
-thicken with Joung-Cheetham ions -- which is what the original DMPG runs used
+thicken with Joung-Cheatham ions -- which is what the original DMPG runs used
 (Na+ JC for AMBER and SLipids) and what produced the thickening this project
 first measured.  Lipid21 suggests only potassium with the older Aqvist
 parameters behaves acceptably for anionic lipids, so the DMPG systems were
@@ -421,7 +421,8 @@ def draw_scd(ax, verbose=False):
 def draw_dhc_traj(ax, cond, verbose=False):
     """Per-frame d_HC(t) for one ion condition, all replicates of all three ff.
 
-    Replicate shades follow Figure 1f (the ``palette.CMAPS`` ramps), so the
+    Replicate shades follow :func:`draw_equilibrium.draw_dhc_traj` (the
+    ``palette.CMAPS`` ramps), so the
     within-condition run-to-run spread reads the same way in both panels; the
     two panels share a y range so the conditions can be compared by eye.
     """
@@ -465,9 +466,10 @@ def draw_ion_binding(ax, kind="gr", ref="box", verbose=False):
     """Counterion pair distribution g(r) around the lipid phosphate.
 
     This is the *mechanism* panel: Lipid21 attributes the over-ordering of
-    anionic lipids to Joung-Cheetham cations binding the headgroup too
+    anionic lipids to Joung-Cheatham cations binding the headgroup too
     strongly, and the P...cation PDF shows that directly -- the first-shell
-    peak is an order of magnitude taller for the JC builds.  ``kind="nr"``
+    peak is ~7-10x taller for the AMBER and SLipids JC builds (CHARMM's is
+    about the same under both conditions).  ``kind="nr"``
     switches to the cumulative coordination number instead (both are in the
     npz); g(r) is the default because the contrast is far starker in the
     peak than in the integral.
@@ -502,7 +504,7 @@ def draw_ion_binding(ax, kind="gr", ref="box", verbose=False):
             if verbose:
                 ion = str(npz.get(f"{ff}_{label}_ion", "?"))
                 nk = f"{ff}_{label}_nr_rep{REPS[0]}"
-                extra = (f", N({FIRST_SHELL:.1f} A) = "
+                extra = (f", N({FIRST_SHELL:.1f} A, rep{REPS[0]}) = "
                          f"{npz[nk][int(np.searchsorted(r, FIRST_SHELL))]:.2f}"
                          if nk in npz else "")
                 print(f"  g(r) {cond:3s} {ff:8s} {ion:8s} "

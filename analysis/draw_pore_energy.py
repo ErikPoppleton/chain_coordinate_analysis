@@ -6,7 +6,8 @@ panels serve an exploratory plot and ``figures/fig02_pore_energy.py``.
 
 ``draw_pmf(ax, lipid)``            the chain-coordinate PMF for one lipid, the
                                    three force fields overlaid and min-zeroed,
-                                   with the five 20 ns partial profiles faint
+                                   with the five consecutive partial profiles
+                                   (10 ns windows; 20 ns for DMPC) faint
                                    behind each full curve.
 ``draw_vs_barrier(ax, prop)``      an equilibrium property against that
                                    system's pore-nucleation barrier, coloured
@@ -33,14 +34,15 @@ from pathlib import Path
 import numpy as np
 from matplotlib.lines import Line2D
 
-from lipiddefs import LIPIDS
+from lipiddefs import LIPIDS, base_lipid
 from palette import FORCEFIELDS
 import make_equilibrium_table as met
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
-N_PARTS = 5                      # five consecutive 20 ns partial profiles
+N_PARTS = 5                      # five consecutive partial profiles (10 ns
+                                 # windows of 50 ns; 20 ns of 100 ns for DMPC)
 LIPID_MARKERS = {"DOPC": "o", "DMPC": "s", "DMPG": "^"}
 
 # Properties this figure can scatter against the barrier, as keys of
@@ -49,9 +51,9 @@ BARRIER_PROPS = {
     "dhc": r"$d_\mathrm{HC}$ (nm)",
     "kappa": r"$\kappa_\theta$ (kJ mol$^{-1}$ nm$^{-2}$)",
     "apl": r"APL ($\mathrm{\AA}^2$)",
-    "dhh": r"$d_\mathrm{HH}$ (nm)",
-    "D": r"$D$ ($\mathrm{\mu m^2\,s^{-1}}$)",
-    "scd": r"$\langle -S_\mathrm{CD}\rangle$",
+    "thick": r"$d_\mathrm{HH}$ (nm)",
+    "diff": r"$D$ ($\mathrm{\mu m^2\,s^{-1}}$)",
+    "chi": r"$\chi$ (kJ mol$^{-1}$ rad$^{-2}$)",
 }
 
 
@@ -98,7 +100,16 @@ def unique_windows(counts):
     return counts[:, keep], counts.shape[1] - len(keep)
 
 
-LAST_WINDOW_FACTOR = 4    # the xi = 1 window was run 4x longer than the rest
+# Umbrella window lengths (ns): every xi = 1 window was extended to 200 ns; the
+# other windows are 50 ns, except DMPC's 100 ns.
+XI1_WINDOW_NS = 200.0
+WINDOW_NS = {"DMPC": 100.0}
+DEFAULT_WINDOW_NS = 50.0
+
+
+def last_window_factor(lipid):
+    """How many times longer the xi = 1 window ran than the others (2 or 4)."""
+    return XI1_WINDOW_NS / WINDOW_NS.get(base_lipid(lipid), DEFAULT_WINDOW_NS)
 
 
 def draw_umbrella_hist(ax, ff, lipid, data=None, lw=0.8, scale=1e-6,
@@ -110,13 +121,15 @@ def draw_umbrella_hist(ax, ff, lipid, data=None, lw=0.8, scale=1e-6,
     ``scale`` (default: millions).  Exact duplicate windows are dropped
     (``unique_windows``).
 
-    The last (xi = 1) window was simulated ``LAST_WINDOW_FACTOR`` = 4x longer
-    than the others, so it is divided by 4 to put every window on the same
-    per-sample footing -- but only where its total count really is ~4x the
-    median of the others.  AMBER DMPC's windows all hold ~50 M samples, last
-    included, so dividing there would make the last window look under-sampled;
-    such a system is left as-is with a printed note.  Returns the number of windows drawn, or 0 if the
-    file is missing.
+    The last (xi = 1) window ran 200 ns against 50 ns for the others (100 ns
+    for DMPC), so it is divided by that length ratio (``last_window_factor``:
+    4, or 2 for DMPC) to put every window on the same per-ns footing.  The
+    divisor comes from the run lengths, not from the histogram totals: the
+    xi = 1 window's total count understates its length in histograms from
+    ``gmx wham -auto``, which drops every sample equal to the histogram
+    maximum -- here the saturated xi = 1 (up to ~70 % of a DMPG xi = 1 window).
+    Histograms from an explicit-range run (``-min 0 -max 1.005``) keep them.  Returns the number of windows drawn, or 0 if the file is
+    missing.
     """
     import matplotlib.pyplot as plt
     path = Path(data or DATA) / f"{ff}_{lipid}_hist.xvg"
@@ -125,14 +138,8 @@ def draw_umbrella_hist(ax, ff, lipid, data=None, lw=0.8, scale=1e-6,
         return 0
     xi, counts = load_hist(path)
     counts, dropped = unique_windows(counts)
-    totals = counts.sum(axis=0)
-    ratio = totals[-1] / np.median(totals[:-1])
-    if abs(ratio - LAST_WINDOW_FACTOR) < 0.5:
-        counts = counts.copy()
-        counts[:, -1] /= LAST_WINDOW_FACTOR
-    else:
-        print(f"note: {ff}_{lipid}: last window holds {ratio:.2f}x the median "
-              f"window's samples, not {LAST_WINDOW_FACTOR}x -- left unscaled")
+    counts = counts.copy()
+    counts[:, -1] /= last_window_factor(lipid)
     colours = plt.get_cmap("tab10").colors
     for i in range(counts.shape[1]):
         ax.plot(xi, counts[:, i] * scale, color=colours[i % len(colours)],
@@ -181,7 +188,8 @@ def barrier(ff, lipid, data=None, verbose=False):
 
 
 def partial_barriers(ff, lipid, data=None):
-    """The same pore barrier from each of the five 20 ns partial profiles.
+    """The same pore barrier from each of the five partial profiles (10 ns
+    windows; 20 ns for DMPC).
 
     Same basin-to-pore-side-peak definition as :func:`barrier`, applied to
     ``{ff}_{lipid}_part{1..5}_profile.xvg`` -- the faint curves behind each PMF
@@ -203,8 +211,8 @@ def partial_barriers(ff, lipid, data=None):
 def draw_pmf(ax, lipid, partials=True, data=None, title=None, verbose=False):
     """Min-zeroed PMF profiles for one lipid, force fields overlaid.
 
-    Each full curve is shifted so its own minimum is zero; the five 20 ns
-    partial profiles are drawn faintly behind it as a convergence check.
+    Each full curve is shifted so its own minimum is zero; the five partial
+    profiles (10 ns windows; 20 ns for DMPC) are drawn faintly behind it as a convergence check.
     Force fields with no profile are simply absent.
 
     ``data`` reads the profiles from another directory (``data/data_Na`` holds
@@ -247,7 +255,7 @@ def draw_vs_barrier(ax, prop, rows=None, verbose=False):
 
     Colour is the force field, marker the lipid.  The x error bar is whatever
     ``collect()`` supplies for that column -- the hierarchical 95 % CI for
-    APL/d_HC/d_HH/kappa, the replicate SD for D and <-S_CD>.
+    APL/d_HC/d_HH/chi/kappa, the replicate SD for D and <-S_CD>.
     """
     if rows is None:
         rows, _ = met.collect()

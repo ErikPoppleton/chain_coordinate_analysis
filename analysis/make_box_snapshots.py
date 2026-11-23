@@ -4,16 +4,17 @@ PyMOL snapshots sharing a single camera, for the SI box-z figure.
 
 Why a shared camera: the point of the pair is that the box *grows* along z over
 the run (AMBER DMPG: Box-Z 7.53 -> 9.01 nm), which is only legible if both
-panels are drawn at the same scale.  The zoom is therefore fitted once to the
-**union** of the two frames' atoms and reused for both renders, and the image
-aspect is set from that union box so the fit is not distorted by a square
-viewport.
+panels are drawn at the same scale.  The camera scale is therefore fitted once
+to the **union** of the two frames' atoms and reused for both renders (each
+frame is still centred in its own panel), and the image aspect is set from that
+union box so the fit is not distorted by a square viewport.
 
-Style follows ``snapshots/*_style.pml`` (the ``make_figures`` panels) -- water
-and ions as spheres, ions coloured explicitly since a ``.gro`` carries no
-element column -- with three deliberate differences: the **lipid tails stay
-visible** (there is no pore to look through here), the background is
-**transparent** rather than grey, and there is no cylinder marker.
+Style follows the older ``snapshots/*_style.pml`` panels -- water and ions as
+spheres, ions coloured explicitly since PyMOL's element guess from the atom
+name (a ``.gro`` carries no element column) gets several of them wrong -- with
+three deliberate differences: the **lipid tails stay visible** (there is no
+pore to look through here), the background is **transparent** rather than
+grey, and there is no cylinder marker.
 
     PYTHONNOUSERSITE=1 conda run -n lipid64 python analysis/make_box_snapshots.py
     ->  snapshots/{ff}_{lipid}{rep}_{first,last}.{gro,png}
@@ -93,10 +94,10 @@ def build_pml(paths, extents, pml, pngs):
 
     Two centring subtleties:
 
-    * ``zoom`` leaves in-plane camera offsets from its own (letterboxed) fit;
-      keeping them while overriding only the distance pushed the content
-      off-centre (114 px of top margin against 32 px of bottom), so ``v[9:11]``
-      are zeroed and the rotation origin set explicitly.
+    * an earlier ``zoom``-based fit left in-plane camera offsets; keeping
+      them while overriding only the distance pushed the content off-centre
+      (114 px of top margin against 32 px of bottom), so ``v[9:11]`` are
+      zeroed and the rotation origin set explicitly.
     * the origin is **per frame**, not the union centre.  Each bilayer is
       centred in its *own* box, and the boxes differ in z, so a shared origin
       left the shorter first frame riding high in its panel.  ``dist`` (the
@@ -128,6 +129,7 @@ def build_pml(paths, extents, pml, pngs):
         f"show spheres, {solvent_sel}",
     ]
     for resn, colour in (("Na+", "sodium"), ("NA", "sodium"), ("SOD", "sodium"),
+                         ("K+", "potassium"), ("POT", "potassium"),
                          ("Cl-", "chlorine"), ("CL", "chlorine"),
                          ("CLA", "chlorine"), ("MG", "magnesium"),
                          ("CA", "calcium"), ("CAL", "calcium")):

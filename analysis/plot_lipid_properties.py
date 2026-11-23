@@ -7,7 +7,10 @@ within a panel the three force fields (CHARMM, AMBER, SLipids) are overlaid in
 the shared colour scheme from ``palette.py``.
 
   * area_per_lipid, memb_thickness, registration
-        -> overlaid histograms (density-normalised).
+        -> overlaid histograms (density-normalised), plus a 3x3 replicate-1
+           per-frame trajectory figure each (``lipprop_traj_*.png``).
+  * d_HC (lipyphilic, from ``core_thickness.npz``)
+        -> overlaid histograms, the d_HH companion.
   * S_CD order parameter (g_lomepro)
         -> per-carbon profile, carbon number down an inverted y-axis.
   * lateral_diffusion
@@ -108,9 +111,9 @@ def plot_core_thickness_histograms():
     Reads the per-frame **lipyphilic** hydrophobic-core thickness from
     ``core_thickness.npz`` (the only d_HC metric stored per frame -- the density
     metric is 3 scalars/system and can't form a distribution), pools the 3
-    replicates (250 frames each, last 50 ns) and draws the same 1x3 overlaid
-    density histogram as ``plot_histograms`` -> ``plots/lipprop_core_thickness.png``.
-    Units are nm (the standard core-thickness unit; d_HH is in A)."""
+    replicates (2501 frames each, the full 500 ns -- no t0 cut) and draws the
+    same 1x3 overlaid density histogram as ``plot_histograms`` ->
+    ``plots/lipprop_core_thickness.png``.  Units are nm, like the d_HH histogram."""
     path = DATA / "core_thickness.npz"
     if not path.exists():
         print(f"skip core_thickness: {path} not found")
@@ -216,7 +219,7 @@ def plot_lateral_diffusion():
             ax.plot(lag, mean, color=color, lw=1.8, label=label)
             curves.append((lag, mean))
             if msd.shape[0] > 1:
-                sd = msd.std(axis=0)
+                sd = msd.std(axis=0, ddof=1)
                 # Clip the lower band to stay positive for the log y-axis.
                 lo = np.clip(mean - sd, 1e-6, None)
                 ax.fill_between(lag, lo, mean + sd, color=color, alpha=0.2, lw=0)
@@ -224,7 +227,7 @@ def plot_lateral_diffusion():
             D = data[f"{ff}_{lipid}_D"] * 1e8  # cm^2/s -> µm^2/s
             bar_x.append(i)
             bar_h.append(np.mean(D))
-            bar_e.append(np.std(D) if D.size > 1 else 0.0)
+            bar_e.append(np.std(D, ddof=1) if D.size > 1 else 0.0)
             bar_c.append(color)
         ax.set_title(lipid)
         ax.set_xlabel("lag time (ns)")
@@ -322,7 +325,7 @@ def plot_scd():
             cmax = max(cmax, int(carbons.max()))
             ax.plot(mean, carbons, color=color, marker="o", ms=3, lw=1.5, label=label)
             if len(profiles) > 1:
-                sd = profiles.std(axis=0)
+                sd = profiles.std(axis=0, ddof=1)
                 ax.fill_betweenx(carbons, mean - sd, mean + sd, color=color,
                                  alpha=0.2, lw=0)
         ax.set_title(lipid)

@@ -48,12 +48,11 @@ ZOOM_BUFFER = 2.0       # A of padding around the membrane in the "close" view
 
 SETS = ["last", "close"]
 
-# Ion residue names per force field, and the PyMOL colour each should get.
-# PyMOL guesses the element from the atom name (a .gro carries no element
-# column) and gets several of these wrong, differently per force field:
-# CHARMM SOD comes out sulfur-yellow and CAL green, AMBER Na+ comes out white.
 # Every ion resname across the three force fields, with the PyMOL colour each
-# should get.  Listing them all rather than keying on the force field keeps the
+# should get.  The colours are set explicitly because PyMOL guesses the element
+# from the atom name (a .gro carries no element column) and gets several of
+# these wrong, differently per force field: CHARMM SOD comes out sulfur-yellow
+# and CAL green, AMBER Na+ comes out white.  Listing them all rather than keying on the force field keeps the
 # script right when a system is rebuilt with a different ion set (the DMPG
 # systems moved to potassium, and the SLipids build came back with AMBER-style
 # names); resnames absent from a structure simply select nothing.
@@ -73,10 +72,11 @@ def esc(resn):
 
 
 def gro_path(ff, lipid, which):
-    """Input structure, preferring a residue-renumbered copy where one exists.
+    """Input structure, preferring a recentred or renumbered copy where one exists.
 
     Raw Lipid21 gros number every residue 1, which PyMOL reads as one giant
-    residue; the ``*_renumbered.gro`` copies fix that where they were made."""
+    residue; the ``*_renumbered.gro`` copies fix that where they were made, and
+    the ``*_centred.gro`` copies (center_pore_gro.py) move a pore off a box face."""
     stem = f"{ff}_{lipid}_" + ("last_conf" if which == "last" else "close")
     raw = SNAP / f"{stem}.gro"
     # Preference order: a PBC-recentred copy (center_pore_gro.py, for a pore

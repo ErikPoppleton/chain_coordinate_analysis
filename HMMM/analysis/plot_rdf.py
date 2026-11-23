@@ -14,8 +14,8 @@ the line the mean over replicates and the band their SD:
 
     PYTHONNOUSERSITE=1 conda run -n base python HMMM/analysis/plot_rdf.py
 
-**The g(r) plateau is not 1**, and the dotted grey line in each panel marks
-where it actually sits: MDAnalysis normalises against the box-average density,
+**The g(r) plateau is not 1**, and a dotted line in each force field's colour
+marks where it actually sits: MDAnalysis normalises against the box-average density,
 and DCLE is confined to the bilayer core, so its local density is a few times
 the box average.  Peak *positions* are unaffected; peak *heights* are scaled by
 that factor, which differs between systems as the core thickness does.

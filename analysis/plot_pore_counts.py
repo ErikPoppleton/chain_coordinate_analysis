@@ -16,8 +16,8 @@ pair of axes sharing the count (y) axis: a wide occupancy-vs-time trajectory
 (3/4 width) and, to its right, a narrow **vertical histogram** (1/4 width) that
 aggregates that trajectory into the marginal distribution of the count -- one
 outline per force field, with **1-atom (integer) bins**.  Within each panel the
-three force fields overlay in the ``palette`` scheme (CHARMM blue / AMBER green
-/ SLipids gold); each row (atom type) shares a y-scale.  Panels with no data are
+three force fields overlay in the ``palette`` scheme (CHARMM blue / AMBER gold
+/ SLipids green); each row (atom type) shares a y-scale.  Panels with no data are
 left blank.
 
 Requires only numpy + matplotlib.

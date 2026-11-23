@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Scatter every equilibrium membrane property against the **pore-nucleation
-energy barrier** (the min->max range of that system's PMF profile), one panel
-per property, in a 3-wide grid.
+energy barrier** (the climb from the PMF basin to its pore-side peak), one
+panel per property, in a 3-wide grid.
 
-For each (force field, lipid) system the barrier is ``max(PMF) - min(PMF)`` read
-from ``data/{ff}_{lipid}_profile.xvg`` (the full chain-coordinate PMF), and the
-equilibrium properties (APL, thickness, D, S_CD, and the two tilt moduli) are
-the per-system means reused from ``make_equilibrium_table.collect()`` with its
-error bars: a **hierarchical 95% CI** (autocorrelation-aware) for the per-frame
-observables APL / d_HC, and the SD across replicates for the fitted D / S_CD /
-chi / kappa.  Points are **coloured by force field** (palette) and
+For each (force field, lipid) system the barrier is
+``draw_pore_energy.barrier()`` of ``data/{ff}_{lipid}_profile.xvg`` (the full
+chain-coordinate PMF; *not* max - min, see its docstring), and the equilibrium
+properties (APL, d_HC, D and the two tilt moduli) are the per-system means
+reused from ``make_equilibrium_table.collect()`` with its error bars: a
+**hierarchical 95% CI** (autocorrelation-aware) for APL / d_HC / chi / kappa,
+and the SD across replicates for D.  The chain-averaged g_lomepro <-S_CD> is
+not in the table, so it is read here (``scd_rep_scalars``) and carries the SD
+across replicates too.  Points are **coloured by force field** (palette) and
 **shaped by lipid**; a shared legend fills a leftover grid cell if one exists,
 else it sits above the panels.
 
@@ -24,7 +26,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 from palette import FORCEFIELDS
-from lipiddefs import LIPIDS
+from lipiddefs import LIPIDS, REPS
 import make_equilibrium_table as met
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,13 +60,31 @@ def load_xvg(path):
     return np.array(x), np.array(y)
 
 
+def scd_rep_scalars(ff, lipid):
+    """Chain-averaged -S_CD per rep, pooling both tails (col 2 of each .dat)."""
+    out = []
+    for n in REPS:
+        vals = []
+        for sn in (1, 2):
+            f = DATA / ("%s_%s_%d_scd_sn%d.dat" % (ff, lipid, n, sn))
+            if f.exists():
+                arr = np.loadtxt(f)
+                if arr.ndim == 1:
+                    arr = arr[None, :]
+                vals.append(arr[:, 1])            # col 2 = mean -S_CD per carbon
+        out.append(float(np.concatenate(vals).mean()) if vals else None)
+    return out
+
+
 # barrier() lives in draw_pore_energy -- one definition, since it is subtler
 # than it looks (the xi->0 edge can out-top the pore peak; see its docstring).
 from draw_pore_energy import barrier  # noqa: E402
 
 
 def main():
-    rows, _ = met.collect()                     # {(ff,lipid): {prop: (mean, sd)}}
+    rows, _ = met.collect()                     # {(ff,lipid): {prop: (mean, err)}}
+    for (ff, lip), cell in rows.items():
+        cell["scd"] = met.summarise_reps(scd_rep_scalars(ff, lip))
     barriers = {(ff, lip): barrier(ff, lip)
                 for ff, _, _ in FORCEFIELDS for lip in LIPIDS}
 
@@ -89,7 +109,7 @@ def main():
                     continue
                 mean, err = cell
                 # barrier on y; property on x with its error bar (hierarchical
-                # 95% CI for APL/d_HC, replicate SD for the fitted quantities).
+                # 95% CI for APL/d_HC/chi/kappa, replicate SD for D/S_CD).
                 ax.errorbar(mean, b, xerr=err, marker=LIPID_MARKERS[lip],
                             color=color, mec="black", mew=0.4, ms=7,
                             capsize=3, linestyle="none")

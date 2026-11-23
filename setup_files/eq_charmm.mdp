@@ -15,7 +15,7 @@ compressed-x-grps    = System    ; save the whole system
 
 ; Bonded parameters
 constraint_algorithm = lincs     ; holonomic constraints 
-constraints          = h-bonds ; for relaxation, constrain everything
+constraints          = h-bonds   ; bonds involving H are constrained
 lincs_iter           = 1         ; accuracy of LINCS
 lincs_order          = 4         ; also related to accuracy
 
@@ -26,7 +26,7 @@ rvdw-switch          = 1.0
 coulombtype          = PME       ; How to compute coulomb interactions
 vdwtype              = Cut-off   ; How to compute vdw interactions
 vdw-modifier         = force-switch    ; How the cutoff goes to 0 in vdw interactions
-DispCorr             = no        ; account for cut-off vdW scheme
+DispCorr             = no        ; no dispersion correction (CHARMM36)
 
 ; PME settings
 pme-order            = 4         ; cubic interpolation

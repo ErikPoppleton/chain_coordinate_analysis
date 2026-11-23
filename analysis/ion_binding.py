@@ -14,9 +14,10 @@ so N rises from 0 and its first plateau is the first-shell occupancy.  An
 over-binding ion gives a steep early rise and a high plateau; a weakly bound
 one stays flat until the diffuse layer.
 
-Counterions are the **cations** present (``POT``/``K+`` for the potassium
-builds, ``SOD``/``Na+``/``NA`` for the Joung-Cheetham ones), so the same script
-covers both conditions without being told which is which.  Distances are
+Counterions are the **monovalent cations** present (``POT``/``K+`` for the
+potassium builds, ``SOD``/``Na+``/``NA`` for the Joung-Cheetham ones), so the
+same script covers both conditions without being told which is which.  The few
+Mg2+/Ca2+ of the old-ion builds (4 + 2 per system) are not counted.  Distances are
 minimum-image (the ions are wrapped into the box, and the diffuse layer wraps
 across the z faces).
 
@@ -72,8 +73,9 @@ def coordination(u, stride=STRIDE):
     that shell.  **Caveat on g(r)**: the ions are confined to the water slab,
     not spread through the box, so the box-average density used for the ideal
     reference is an underestimate and g(r) does not tend to 1 at large r.  The
-    first-shell *peak* is still directly comparable between systems (same box,
-    same ion count), which is what the figure uses it for.
+    first-shell *peak* is still directly comparable between systems (box volumes
+    agree to ~2 %, ~300 nm^3, and the Na+/K+ counts are 141/142), which is
+    what the figure uses it for.
     """
     phos = u.select_atoms("name " + " ".join(sorted(PHOSPHATE_NAMES)))
     ions = u.select_atoms("resname " + " ".join(CATIONS))
@@ -81,7 +83,7 @@ def coordination(u, stride=STRIDE):
         raise SystemExit("no phosphorus atoms (names %s)"
                          % sorted(PHOSPHATE_NAMES))
     if ions.n_atoms == 0:
-        return None, None
+        return None, None, None
     ion_resn = sorted(set(ions.resnames))
 
     counts = np.zeros(len(R_A))

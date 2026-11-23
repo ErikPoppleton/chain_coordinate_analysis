@@ -5,8 +5,8 @@ trajectory into the topology-PDB + DCD pair that OpenStructure reads.
 OpenStructure only reads PDB/CRD structures and CHARMM **DCD** trajectories, runs
 under Python 2.7 (no MDAnalysis), and loads a multi-model PDB only by holding
 every frame's entity in memory.  So we read the ``gro``+``xtc`` here (MDAnalysis,
-fast binary xtc) and emit a compact ``data/tilt_{ff}_{lipid}.pdb`` (frame-0
-topology) + ``.dcd`` (all frames) that OST streams frame-by-frame.
+fast binary xtc) and emit a compact ``data/tilt_{ff}_{lipid}[_{rep}].pdb``
+(frame-0 topology) + ``.dcd`` (all frames) that OST streams frame-by-frame.
 
 Force-field-specific handling (so ``ost_pymodules``' ``AnalyzeLipidTiltAndSplay``
 sees each lipid as ONE residue with a head->tail vector inside it):
@@ -41,8 +41,8 @@ output); no re-centring is done.
 
 Run in the MDAnalysis env::
 
-    conda run -n lipid64 python analysis/tilt_convert.py tmp/charmm_DMPC_md.gro traj/charmm_DMPC.xtc
-    conda run -n lipid64 python analysis/tilt_convert.py TOP TRAJ -o data/tilt_charmm_DMPC_1
+    PYTHONNOUSERSITE=1 conda run -n lipid64 python analysis/tilt_convert.py \
+        traj/charmm_DMPC.gro traj/charmm_DMPC1.xtc -o data/tilt_charmm_DMPC_1
 """
 
 import argparse

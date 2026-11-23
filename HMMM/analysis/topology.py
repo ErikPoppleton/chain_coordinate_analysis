@@ -1,16 +1,19 @@
 """Build MDAnalysis universes for the HMMM runs, repairing the AMBER residue
-numbering on the way.
+numbering on the way if it needs it.
 
 MDAnalysis can't read the GROMACS 2026 ``.tpr``, so (as in the parent project)
 the ``.gro`` is the topology.  The AMBER (Lipid21) ``.gro`` numbers **every**
-lipid residue ``1`` and lays a lipid out tail-head-tail (``VL``-``PC``-``VL``),
-so MDAnalysis merges the whole 17920-atom lipid block into a couple of giant
-residues.  That is fatal here rather than merely untidy: every lipyphilic
-analysis sizes its output by ``membrane.n_residues`` and indexes leaflets with
-``membrane.residues[...]``, so a 256-phosphate selection spanning one residue
-yields one "lipid".
+lipid residue ``1`` and lays a lipid out tail-head-tail (``VL``-``PC``-``VL``).
+MDAnalysis still starts a new residue at each resname change, so every ``PC``
+head is its own residue and only adjacent ``VL`` tails of neighbouring lipids
+merge (513 lipid residues for 256 lipids).  What would be fatal is phosphates
+sharing a residue: every lipyphilic analysis sizes its output by
+``membrane.n_residues`` and indexes leaflets with ``membrane.residues[...]``,
+so a 256-phosphate selection spanning one residue would yield one "lipid".
+:func:`topology_for` checks exactly that, and the downloaded AMBER files pass
+(one phosphate per ``PC`` residue), so they are currently used unchanged.
 
-Rather than rewrite the downloaded trajectories' topology in place, this module
+For a file that fails the check, rather than rewrite the downloaded trajectories' topology in place, this module
 writes a **renumbered copy** into ``HMMM/data/topol/{stem}.gro`` the first time
 it is needed and reuses it afterwards.  Molecule boundaries are found the way
 ``make_order_index``/``renumber_gro`` find them -- ignoring the resid entirely,
@@ -19,8 +22,8 @@ each molecule gets its own resid.  That is enough for the phosphate-keyed
 analyses (one phosphate per lipid, in AMBER's ``PC`` head residue) and needs no
 knowledge of how many residues a lipid has.
 
-Files that already resolve to one residue per lipid (CHARMM, and presumably
-SLipids) are used unchanged.
+Files whose phosphates already land one per residue (CHARMM and SLipids, one
+residue per lipid, and the AMBER files as above) are used unchanged.
 """
 
 import sys

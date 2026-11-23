@@ -16,7 +16,8 @@ defined on the production portion, and this keeps ``g`` consistent with the
 ``Neff_max = (T - t0) / g_prod`` beside it.  ``g_full`` (the whole series,
 inflated by any pre-equilibration transient) is retained per-replicate in the
 JSON as a diagnostic only -- when ``t0`` is large (a still-drifting run) the two
-diverge sharply (e.g. AMBER DMPG APL: g_full ~136 vs g_prod ~18).
+diverge sharply (e.g. AMBER DMPG rep 3 APL, t0 = 184 ns: g_full ~63 vs
+g_prod ~27; on the old-ion runs it was ~136 vs ~18).
 
 Background: MD frames are autocorrelated, so the raw frame count overstates how
 much independent information a trajectory carries.  The statistical inefficiency
@@ -27,9 +28,13 @@ These are the numbers that tell you, per observable, whether the run-to-run
 spread could plausibly be pure within-run sampling noise (``Neff_max`` large) or
 must reflect real between-run variance (``Neff_max`` small).
 
-Per-frame observables (the ones with a genuine time axis in ``data/lipprops_*.npz``):
+Per-frame observables (the ones with a genuine time axis; ``data/lipprops_*.npz``
+unless noted):
   * ``apl``           -- area per lipid, mean over lipids per frame (A^2)
   * ``thickness``     -- P-P bilayer thickness per frame (A)
+  * ``dhc``           -- hydrophobic-core thickness d_HC per frame (nm; read from
+                         ``data/core_thickness.npz`` key ``{ff}_{lipid}_lipy_rep{n}``,
+                         optional)
   * ``registration``  -- inter-leaflet registration per frame
   * ``scc``           -- chain-averaged S_CC per frame (mean over both tails,
                          all chains, all carbons)
@@ -268,11 +273,11 @@ def main():
                 nf = np.array([r["Neff_max"] for r in rows])
                 N = rows[0]["N"]
                 all_g += list(g); all_neff += list(nf)
-                print(f"  {sys:16s} {N:5d} {g.mean():7.1f} ± {g.std(ddof=0):5.1f} "
-                      f"{nf.mean():10.1f} ± {nf.std(ddof=0):6.1f} {nf.min():13.1f}")
+                print(f"  {sys:16s} {N:5d} {g.mean():7.1f} ± {g.std(ddof=1):5.1f} "
+                      f"{nf.mean():10.1f} ± {nf.std(ddof=1):6.1f} {nf.min():13.1f}")
         g = np.array(all_g); nf = np.array(all_neff)
-        print(f"  {'-- overall --':16s} {'':5s} {g.mean():7.1f} ± {g.std(ddof=0):5.1f} "
-              f"{nf.mean():10.1f} ± {nf.std(ddof=0):6.1f} {nf.min():13.1f}")
+        print(f"  {'-- overall --':16s} {'':5s} {g.mean():7.1f} ± {g.std(ddof=1):5.1f} "
+              f"{nf.mean():10.1f} ± {nf.std(ddof=1):6.1f} {nf.min():13.1f}")
 
     # --- variance decomposition: within-run sampling noise vs between-run spread ---
     print("\n\n########  WITHIN-RUN vs BETWEEN-RUN  ########")

@@ -20,7 +20,8 @@
 #     which live in AMBER's *head* residue and so must stay visible here too.
 #     The hydrogens are then picked up by bond, via "neighbor".
 #
-#   * water and ions -- different residue names in each force field.
+#   * water and ions -- different residue names in each force field; the
+#     selections below simply list all of them.
 
 set -e
 
@@ -87,35 +88,19 @@ if !([ $LIPID = DOPC ] || [ $LIPID = DMPC ] || [ $LIPID = DMPG ]); then
     exit 1
 fi
 
-# Water and ion residue names, per force field.
-case $FF in
-    amber)
-        WATER="TP3"
-        # The +/- in the AMBER ion names are selection-list characters to Pymol
-        # and have to be backslash-escaped (quoting them does not work).
-        IONS='resn Na\+ or resn Cl\- or resn MG or resn CA'
-        ION_COLORS='color sodium, resn Na\+
-color chlorine, resn Cl\-
+# Water and ion residue names: every name any of the force fields uses, rather
+# than a per-force-field list, because the rebuilt DMPG systems broke the
+# per-force-field pattern (K+ counterions everywhere, and SLipids DMPG came back
+# with AMBER-style TP3 water and K+/Cl- ions).  The +/- in the AMBER ion names
+# are selection-list characters to Pymol and have to be backslash-escaped
+# (quoting them does not work).
+WATER='resn TIP3+TP3+SOL'
+IONS='resn SOD or resn Na\+ or resn NA or resn POT or resn K\+ or resn CLA or resn Cl\- or resn CL or resn MG or resn CAL or resn CA'
+ION_COLORS='color sodium, resn SOD or resn Na\+ or resn NA
+color potassium, resn POT or resn K\+
+color chlorine, resn CLA or resn Cl\- or resn CL
 color magnesium, resn MG
-color calcium, resn CA'
-        ;;
-    charmm)
-        WATER="TIP3"
-        IONS='resn SOD or resn CLA or resn MG or resn CAL'
-        ION_COLORS='color sodium, resn SOD
-color chlorine, resn CLA
-color magnesium, resn MG
-color calcium, resn CAL'
-        ;;
-    slipids)
-        WATER="SOL"
-        IONS='resn NA or resn CL or resn MG or resn CA'
-        ION_COLORS='color sodium, resn NA
-color chlorine, resn CL
-color magnesium, resn MG
-color calcium, resn CA'
-        ;;
-esac
+color calcium, resn CAL or resn CA'
 
 # How to select the lipid tails.
 if [ $FF = amber ]; then
@@ -135,7 +120,9 @@ select tail_atoms, tail_carbons or (hydro and neighbor tail_carbons)
 delete tail_carbons"
 fi
 
-ERR=$(ls | grep "slurm.[0-9]*.err" | tail -n 1)
+# The newest log = the numerically highest job id (a plain sort would rank
+# slurm.999.err above slurm.1000.err).
+ERR=$(ls | grep -E '^slurm\.[0-9]+\.err$' | sort -t. -k2,2n | tail -n 1 || true)
 if [ -z "$ERR" ]; then
     echo "No slurm.*.err file found in $(pwd) -- cannot read the cylinder geometry."
     exit 1
@@ -155,13 +142,13 @@ ${TAIL_SELECT}
 hide everything, tail_atoms
 delete tail_atoms
 
-# Water and ions (${FF} naming).
+# Water and ions (every force field's names).
 # "hide everything" first because Pymol's automatic styling on load is not the
 # same for every water name (TP3 comes up as spheres, TIP3/SOL as lines), and
 # nb_spheres is no good here: it only draws atoms with no bonds, and Pymol
 # infers the O-H bonds when it reads the .gro.
-hide everything, resn ${WATER}
-show spheres, resn ${WATER}
+hide everything, ${WATER}
+show spheres, ${WATER}
 show spheres, ${IONS}
 
 # Colour the ions explicitly.  Pymol infers the element from the atom name (a

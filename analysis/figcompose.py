@@ -11,7 +11,7 @@ foreign tool -- laid out on the same 180 mm canvas and shipped in the same form.
 
     m = Mosaic()                                   # 180 mm wide
     for col, (ff, label) in enumerate(FF_LABELLED):
-        x, y, w = m.grid_cell(col, ncol=3, aspect=1.0)
+        x, y, w, _ = m.grid_cell(col, ncol=3, aspect=1.0)
         m.place(SNAPSHOTS / f"{ff}_{lipid}_last.png", x, y, w)
         m.text(label, x + w / 2, y - 1.0, ha="middle")
     m.save(f"figure_{lipid}_last")

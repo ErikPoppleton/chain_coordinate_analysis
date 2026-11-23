@@ -87,8 +87,9 @@ def draw_stability_time(ax, verbose=False):
     """Bars of the time each system stayed a bilayer, ensembles along x.
 
     The bar is the mean over replicates and the dots are the individual runs --
-    which matters here, because the systems that fail do not fail in all three
-    (CHARMM NPT breaks in two runs of three, CHARMM NPAT in one).  No hatch
+    which matters here, because the CHARMM systems that fail do not fail in
+    all three (CHARMM NPT breaks in two runs of three, CHARMM NPAT in one;
+    SLipids NPT/NPAT break in every run).  No hatch
     here, unlike the properties figure: the bar heights already say which
     systems fell short of the full microsecond.
     """
@@ -134,7 +135,7 @@ def draw_sd_traces(ax, rep=1, smooth_ns=SMOOTH_NS, show_raw=True, verbose=False)
 
     This is the series the stability time is read off: the raw trace is drawn
     faintly behind a rolling mean, and the dashed line is the threshold.  The
-    y axis is logarithmic because the six runs span 0.14 nm (a flat restrained
+    y axis is logarithmic because the nine traces span 0.14 nm (a flat restrained
     bilayer) to 30 nm (a membrane that has become a filament) -- on a linear
     axis every stable run would sit on the baseline.
     """

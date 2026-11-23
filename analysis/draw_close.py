@@ -106,3 +106,89 @@ def draw_close(ax, ff, lipid, stride=STRIDE, lw=LINEWIDTH, verbose=False):
         print(f"note: {ff}_{lipid} has {drawn}/{N_REP} close replicates")
     ax.set_xlim(0, None)
     return drawn
+
+
+# --- closure-time CDF (the alternative Figure 3) ----------------------------
+CLOSE_XI = 0.6            # a pore counts as closed once xi drops below this
+CLOSE_WINDOW_PS = 100.0   # ... in a trailing moving average over this window
+CLOSE_STRIDE = 100        # read every 100th 2 fs sample -> 0.2 ps spacing,
+                          # 500 samples per 100 ps window
+CLOSE_CACHE = DATA / "close_times.json"
+
+
+def closure_time(path, xi=CLOSE_XI, window_ps=CLOSE_WINDOW_PS,
+                 stride=CLOSE_STRIDE):
+    """First time (ns) at which the trailing ``window_ps`` moving average of xi
+    falls below ``xi``, or None if it never does.
+
+    The average is taken over the samples kept by ``stride`` (0.2 ps apart by
+    default) rather than every 2 fs step; xi is smooth on that scale, so the
+    difference is negligible, and reading every line of a 50 ns file would
+    cost minutes.  The time reported is the *end* of the first window whose
+    mean is below the threshold, so it can be no earlier than ``window_ps``.
+    """
+    t, y = load_pullx(path, stride)
+    if len(t) < 2:
+        return None
+    dt_ps = (t[1] - t[0]) / PS_TO_NS
+    n = max(1, int(round(window_ps / dt_ps)))
+    if len(y) < n:
+        return None
+    c = np.cumsum(np.insert(y, 0, 0.0))
+    avg = (c[n:] - c[:-n]) / n               # avg[k] = mean of y[k : k+n]
+    below = np.nonzero(avg < xi)[0]
+    return float(t[below[0] + n - 1]) if below.size else None
+
+
+def closure_times(ff, lipid, refresh=False, verbose=True):
+    """``(times, run_ns)`` for one system: the ten replicates' closure times in
+    ns (None where the pore never closed) and the run length.
+
+    Results are cached in ``data/close_times.json`` keyed by the system and
+    checked against each pullx file's size and mtime plus the closure
+    parameters, so the 90 large files are only re-read when one changes.
+    """
+    import json
+    cache = json.loads(CLOSE_CACHE.read_text()) if CLOSE_CACHE.exists() else {}
+    paths = [DATA / f"{ff}_{lipid}_close{i + 1}_pullx.xvg" for i in range(N_REP)]
+    sig = {"xi": CLOSE_XI, "window_ps": CLOSE_WINDOW_PS, "stride": CLOSE_STRIDE,
+           "files": [[p.name, p.stat().st_size, int(p.stat().st_mtime)]
+                     for p in paths if p.exists()]}
+    key = f"{ff}_{lipid}"
+    entry = cache.get(key)
+    if refresh or not entry or entry.get("sig") != sig:
+        times = [closure_time(p) if p.exists() else None for p in paths]
+        entry = {"sig": sig, "times": times}
+        cache[key] = entry
+        CLOSE_CACHE.write_text(json.dumps(cache, indent=1))
+    times = entry["times"]
+    run_ns = run_length(ff, lipid, verbose=verbose)
+    if verbose:
+        shut = sorted(t for t in times if t is not None)
+        print(f"  {lipid:5s} {ff:8s} {len(shut)}/{N_REP} closed within "
+              f"{run_ns:g} ns" + (f" (first {shut[0]:.2f}, last {shut[-1]:.2f} ns)"
+                                  if shut else ""))
+    return times, run_ns
+
+
+def draw_closure_cdf(ax, ff, lipid, colour, t_max, lw=1.0, verbose=False):
+    """Cumulative number of closed pores (of ten) against time, as a step line.
+
+    Closure is the first time the 100 ps moving average of xi drops below 0.6
+    (``closure_time``).  A system whose ten pores have all closed is extended
+    flat at 10 out to ``t_max`` (the longest run in the figure): closed pores do
+    not reopen, so its shorter run says nothing new after that.  A system with
+    pores still open stops at the end of its own run, since what the open ones
+    would do later is unknown.
+    """
+    times, run_ns = closure_times(ff, lipid, verbose=verbose)
+    shut = sorted(t for t in times if t is not None)
+    end = t_max if len(shut) == N_REP else run_ns
+    x = [0.0] + shut + [end]
+    y = [0] + list(range(1, len(shut) + 1)) + [len(shut)]
+    ax.step(x, y, where="post", color=colour, lw=lw)
+    if end < t_max:
+        # Mark where the data stop, so a short run is not read as "no closures
+        # ever".
+        ax.plot([end], [len(shut)], marker="|", color=colour, ms=4, mew=lw)
+    return times, run_ns

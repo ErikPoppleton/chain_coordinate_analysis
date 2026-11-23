@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plot the membrane lipid **tilt modulus** chi as a grouped bar chart -- lipids
 along x (DOPC/DMPC/DMPG), the three force fields as coloured bars in the
-``palette.py`` scheme (CHARMM blue / AMBER green / SLipids gold).
+``palette.py`` scheme (CHARMM blue / AMBER gold / SLipids green).
 
 Reads ``data/tilt_moduli.json`` written by ``tilt_modulus.py`` (one entry per
 ``{ff}_{lipid}_{rep}`` with ``chi_kT`` and a block-averaged within-run SEM
@@ -9,7 +9,7 @@ Reads ``data/tilt_moduli.json`` written by ``tilt_modulus.py`` (one entry per
 **hierarchical 95% CI** (``autocorr.hierarchical_ci_from_estimates``): it
 combines each replicate's within-run block SEM with the between-replicate spread
 (``max(between^2, within^2)/n``), so well-reproduced systems get a tight,
-pooled CI and irreproducible ones (AMBER DMPG) an honestly wide one.  chi is in
+pooled CI and irreproducible ones an honestly wide one.  chi is in
 k_B T / rad^2 (per-lipid tilt modulus, no area normalisation -- Khelashvili 2013).
 
 Also writes ``data/tilt_moduli_summary.json`` (mean / SD / 95% CI / n per ff/lipid).
@@ -54,7 +54,7 @@ def aggregate(results):
             [r.get("chi_block_sem", float("nan")) for r in recs],
             [r.get("n_blocks") for r in recs])
         agg[k] = (float(chis.mean()),
-                  float(chis.std(ddof=0)) if len(chis) > 1 else 0.0,
+                  float(chis.std(ddof=1)) if len(chis) > 1 else 0.0,
                   float(ci["ci_half"]) if ci else 0.0,
                   len(chis))
     return agg
@@ -107,7 +107,10 @@ def main():
     ax.legend(frameon=False, loc="upper left")
     # Primary axis in kJ/mol/rad^2 (= chi[k_BT/rad^2] x RT at 310 K); secondary
     # twin axis keeps the underlying k_BT/rad^2 scale for reference.
-    ymax_kT = max(m + c for (m, s, c, n) in agg.values() if n) * 1.15
+    # Only the drawn bars set the scale (agg also holds condition labels such
+    # as DMPG_JC, which this chart does not plot).
+    ymax_kT = max(m + c for (ff, lip), (m, s, c, n) in agg.items()
+                  if n and lip in LIPIDS) * 1.15
     ax.set_ylim(0, ymax_kT * RT_KJ_PER_MOL)
     ax2 = ax.twinx()
     ax2.set_ylim(0, ymax_kT)

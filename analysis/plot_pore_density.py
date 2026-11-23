@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Plot pore (radius, z) density maps as four 3x3 grids -- one figure per atom
 selection (water, phosphorus, glycerol C2, midpoint C), lipids across columns
-(DOPC/DMPC/DMPG), force fields down rows (CHARMM/AMBER/SLipids).
+(DOPC/DMPC/DMPG), force fields down rows (CHARMM/AMBER/SLipids) -- plus two
+zoomed grids (water, phosphorus) restricted to the CV cylinder.
 
 Reads the ``data/poredens_{ff}_{lipid}.npz`` files written by ``pore_density.py``
 (a ``(z, r)`` number-density map per selection, plus shared ``r_edges`` /
-``z_edges`` in nm).  Each panel is drawn as an ``imshow`` (viridis), **peak-
-normalised to 0-1** so panels with very different absolute densities are
-comparable; radius runs along x, z relative to the pore centre (z=0) along y.
-Panels with no data are left blank.  → ``plots/poredens_{selection}.png``.
+``z_edges`` in nm).  Each panel is drawn as an ``imshow`` (viridis), **normalised to 0-1 by one
+peak shared across all nine panels** of a figure (a high percentile of the
+pooled bins, see ``PEAK_PCTL``), so colours compare between panels; radius runs along x, z relative to the pore centre (z=0) along y.
+Panels with no data are left blank.  → ``plots/poredens_{selection}.png`` and
+``plots/poredens_zoom_{water,phosphorus}.png``.
 
 Requires only numpy + matplotlib.
 """

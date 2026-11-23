@@ -15,7 +15,9 @@ for i in {1..10}; do
 	cp ../umbrella.mdp ./close.mdp
 	cp ../submit_umbrella.sh ./submit_close.sh
 	sed -i -e 's/\(^nsteps *= \)[0-9]*\(.*$\)/\12500000 \2/' -e 's/15000/0/' close.mdp
-	sed -i -e '/^\$/d' -e 's/md.tpr/close.tpr/' -e 's/deffnm md/deffnm close/' -e "s/umb23/close$i/" submit_close.sh
+	# Drop the grompp line (done here instead) and point mdrun at close.tpr/close.*;
+	# -cpi close.cpt lets an extended close.tpr continue (ignored on the first run).
+	sed -i -e '/^\$/d' -e 's/md.tpr/close.tpr/' -e 's/deffnm md/deffnm close -cpi close.cpt/' -e "s/umb23/close$i/" submit_close.sh
 	$GMX grompp -f close.mdp -t ../md.cpt -c ../md.gro -n ../../pull.ndx -p ../../topol.top -o close.tpr
 	sbatch submit_close.sh
 	cd ..

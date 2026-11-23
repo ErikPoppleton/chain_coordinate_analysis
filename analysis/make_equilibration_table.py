@@ -4,7 +4,26 @@ per-frame equilibrium observable: the pymbar-detected equilibration time
 ``t0``, the production-region **statistical inefficiency** ``g``, the **total
 number of samples** (production frames) and the effective number of
 uncorrelated samples ``N_eff`` -- one block per (lipid, force field), one row per observable, each
-summarised as mean +/- SD across the three replicate simulations.
+summarised as mean +/- SD across the three replicate simulations -- plus an
+**averaging** column saying how the summary table's 95% CI (and so the
+significance stars on the figures, which use the same SE and dof) was formed.
+
+**The N_eff column shows the independent-sample count the CI actually used**,
+which depends on that regime:
+
+  * ``pooled`` -- the replicates agree within their own sampling noise, so each
+    replicate's SEM is SD/sqrt(N_eff) and the dof is sum(N_eff) - 1: the
+    column is that **sum** over the three replicates of N_eff = N/g.
+  * ``replicate`` -- the replicate spread dominates, so the SE is the SD of the
+    three replicate means / sqrt(3) on 2 dof and the within-run N_eff never
+    enters it (it only decided the regime): the column is **3**.
+  * the <delta theta^2> rows report the tilt modulus kappa_theta fitted on that
+    series, whose within-run error is a block average: pooled, the column is
+    the total number of blocks over the three replicates (``n_blocks`` in
+    lipidator_blocks.json); replicate, 3.  There g sizes the blocks rather than giving N_eff.
+
+The regimes come from ``make_equilibrium_table.regimes()``, i.e. exactly the
+computation behind the summary table.
 
 Source is ``data/equilibrium_timeseries_stats.json`` (written by ``stats.py``,
 whose ``detect_equilibration`` picks ``t0 = argmax N_eff`` per Chodera 2016).
@@ -25,6 +44,7 @@ from pathlib import Path
 import numpy as np
 
 from lipiddefs import FF_LABELLED as FORCEFIELDS, LIPIDS
+import make_equilibrium_table as met
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -39,17 +59,12 @@ OBS = [
     ("tilt",         r"$\langle\delta\theta^{2}\rangle$"),
 ]
 
+# summary-table column whose CI regime each row reports
+REGIME_COL = {"apl": "apl", "thickness": "thick", "dhc": "dhc", "tilt": "kappa"}
+REGIME_LABEL = {"pooled": "pooled", "between-run": "replicate"}
+
 # plain-text row labels for the terminal preview (the LaTeX ones don't strip well)
 PLAIN = {"apl": "APL", "thickness": "d_HH", "dhc": "d_HC", "tilt": "<dtheta^2>"}
-
-
-def total_ns(stats, okey):
-    """Full trajectory length (ns) analysed for observable ``okey`` = the max
-    frame count over all systems x reps x dt (data-driven, so the table stays
-    correct if a source trajectory's length changes -- e.g. d_HC recomputed on
-    the full 500 ns)."""
-    Ns = [r["N"] for recs in stats.get(okey, {}).values() for r in recs]
-    return max(Ns) * NS_PER_FRAME if Ns else None
 
 
 def load_stats():
@@ -61,11 +76,40 @@ def load_stats():
 
 
 def ms(vals, dec=0):
-    """mean +/- SD (population) of a list -> LaTeX string, or '--' if empty."""
+    """mean +/- SD (sample, ddof=1) of a list -> LaTeX string, or '--'."""
     v = [x for x in vals if x is not None and np.isfinite(x)]
     if not v:
         return "--"
-    return "%.*f $\\pm$ %.*f" % (dec, np.mean(v), dec, np.std(v))
+    sd = np.std(v, ddof=1) if len(v) > 1 else 0.0
+    return "%.*f $\\pm$ %.*f" % (dec, np.mean(v), dec, sd)
+
+
+def load_blocks():
+    p = DATA / "lipidator_blocks.json"
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
+def used_n(regimes, blocks, ff, lipid, okey, neff):
+    """The independent-sample count the summary table's CI used (see module
+    docstring): 3 in the replicate regime, else per-replicate N_eff (or, for
+    the tilt rows, kappa_theta's blocks per replicate).  Returns a list of
+    per-replicate values, or None."""
+    regime = regimes.get((ff, lipid, REGIME_COL[okey]), {}).get("regime")
+    if regime == "between-run":
+        return [3.0]
+    if okey == "tilt":
+        nb = [blocks.get("%s_%s_%d" % (ff, lipid, n), {}).get("n_blocks")
+              for n in (1, 2, 3)]
+        nb = [float(x) for x in nb if x is not None]
+        return nb or None
+    return list(neff)
+
+
+def n_cell(vals):
+    """3 for the replicate regime, else the sum over replicates (pooled)."""
+    if not vals:
+        return "--"
+    return "3" if vals == [3.0] else "%d" % int(round(sum(vals)))
 
 
 def rows_for(stats, ff, lipid, obs):
@@ -81,108 +125,86 @@ def rows_for(stats, ff, lipid, obs):
     return (t0 * NS_PER_FRAME, g, (N - t0), neff)
 
 
-def traj_len_sentence(stats):
-    """Caption sentence stating each observable's analysed trajectory length,
-    grouped -- data-driven so it self-corrects if a source length changes."""
-    from collections import defaultdict
-    groups = defaultdict(list)
-    for okey, olabel in OBS:
-        T = total_ns(stats, okey)
-        if T is not None:
-            groups[round(T)].append(olabel)
-    if len(groups) == 1:
-        return "All observables span the full $%g$\\,ns runs." % list(groups)[0]
-    parts = ["%s span $%g$\\,ns" % (", ".join(labs), T)
-             for T, labs in sorted(groups.items(), reverse=True)]
-    return "; ".join(parts) + "."
+def regime_cell(regimes, ff, lipid, okey):
+    r = regimes.get((ff, lipid, REGIME_COL[okey]))
+    return REGIME_LABEL.get(r["regime"], "--") if r else "--"
 
 
-QUICK_T0_NS = 40.0      # "equilibrates quickly" threshold for the caption
+def ratio_cell(regimes, ff, lipid, okey):
+    """between_sd / within_sem, the quotient the regime is decided on."""
+    r = regimes.get((ff, lipid, REGIME_COL[okey]))
+    return "%.2f" % r["ratio"] if r and np.isfinite(r["ratio"]) else "--"
 
 
-def burnin_sentence(stats):
-    """Caption sentence summarising the burn-ins and the worst-sampled series.
-
-    Computed from the JSON rather than written by hand: a hand-written version
-    ("the DMPG bilayers, especially AMBER, show long t0 ... few uncorrelated
-    samples") described the old Na+/Mg2+/Ca2+ DMPG runs and silently went stale
-    when the potassium rebuild removed that behaviour.
-    """
-    series = []          # (t0_ns, neff, ff_label, lipid) per replicate x observable
-    for lipid in LIPIDS:
-        for ff, fflabel in FORCEFIELDS:
-            for okey, _ in OBS:
-                for r in stats.get(okey, {}).get("%s_%s" % (ff, lipid), []):
-                    series.append((r["t0"] * NS_PER_FRAME, r["Neff_max"],
-                                   fflabel, lipid))
-    if not series:
-        return ""
-    quick = sum(t0 <= QUICK_T0_NS for t0, _, _, _ in series)
-    # The longest burn-in per system, for the two systems with the longest.
-    longest = {}
-    for t0, _, fflabel, lipid in series:
-        key = "%s %s" % (fflabel, lipid)
-        longest[key] = max(longest.get(key, 0.0), t0)
-    top = sorted(longest.items(), key=lambda kv: -kv[1])[:2]
-    min_neff = min(neff for _, neff, _, _ in series)
-    return ("  Most series equilibrate quickly ($t_0\\le%g$\\,ns for %d of %d "
-            "replicate--observable series); the longest burn-ins are single "
-            "replicates (%s), and every series retains "
-            "$N_\\mathrm{eff}\\ge%d$ uncorrelated samples."
-            % (QUICK_T0_NS, quick, len(series),
-               "; ".join("%s, $\\approx%.0f$\\,ns" % (k, round(v, -1))
-                         for k, v in top),
-               int(np.floor(min_neff))))
-
-
-def build_latex(stats):
+def build_latex(stats, regimes, blocks):
     L = []
     L.append("% Requires \\usepackage{booktabs,multirow,amsmath}")
     L.append("\\begin{table}[t]")
     L.append("\\centering")
     L.append("\\small")
     L.append("\\setlength{\\tabcolsep}{5pt}")
-    L.append("\\begin{tabular}{lllcccc}")
+    L.append("\\begin{tabular}{lllcccclc}")
     L.append("\\toprule")
-    L.append("Lipid & FF & Observable & $t_0$ & $g$ & $N$ & $N_\\mathrm{eff}$ \\\\")
+    L.append("Lipid & FF & Observable & $t_0$ & $g$ & $N$ "
+             "& $\\sigma_\\mathrm{btw}/\\sigma_\\mathrm{wth}$ & Averaging "
+             "& $N_\\mathrm{eff}$ \\\\")
     L.append(" & & & {\\footnotesize (ns)} & {\\footnotesize (frames)} "
-             "& {\\footnotesize (frames)} & {\\footnotesize (uncorr.)} \\\\")
+             "& {\\footnotesize (frames)} & & & {\\footnotesize (indep.)} \\\\")
     L.append("\\midrule")
     for li, lipid in enumerate(LIPIDS):
         for fi, (ff, fflabel) in enumerate(FORCEFIELDS):
             for oi, (okey, olabel) in enumerate(OBS):
                 r = rows_for(stats, ff, lipid, okey)
                 if r is None:
-                    cells = ["--"] * 4
+                    cells = ["--"] * 3 + [ratio_cell(regimes, ff, lipid, okey),
+                                          regime_cell(regimes, ff, lipid, okey),
+                                          "--"]
                 else:
                     t0, g, nsamp, neff = r
-                    cells = [ms(t0), ms(g, 1), ms(nsamp), ms(neff)]
+                    cells = [ms(t0), ms(g, 1), "%d" % int(round(np.sum(nsamp))),
+                             ratio_cell(regimes, ff, lipid, okey),
+                             regime_cell(regimes, ff, lipid, okey),
+                             n_cell(used_n(regimes, blocks, ff, lipid, okey, neff))]
                 lipcol = ("\\multirow{%d}{*}{%s}" % (len(FORCEFIELDS) * len(OBS), lipid)
                           if fi == 0 and oi == 0 else "")
                 ffcol = ("\\multirow{%d}{*}{%s}" % (len(OBS), fflabel)
                          if oi == 0 else "")
                 L.append(" & ".join([lipcol, ffcol, olabel] + cells) + " \\\\")
             if fi < len(FORCEFIELDS) - 1:
-                L.append("\\cmidrule(l){2-7}")
+                L.append("\\cmidrule(l){2-9}")
         if li < len(LIPIDS) - 1:
             L.append("\\midrule")
     L.append("\\bottomrule")
     L.append("\\end{tabular}")
-    L.append("\\caption{Equilibration analysis of the per-frame equilibrium "
-             "observables (mean $\\pm$ SD over three replicates).  $t_0$ is the "
-             "equilibration time discarded (pymbar automatic detection, "
-             "$t_0=\\arg\\max N_\\mathrm{eff}$\\cite{chodera2016simple}); $g$ is the "
-             "statistical inefficiency of the production span $[t_0,T]$; $N$ is "
-             "the number of production frames and $N_\\mathrm{eff}=(T-t_0)/g$ the "
-             "effective number of uncorrelated samples.  Frames $\\to$ ns at $0.2$\\,ns/frame.  " + traj_len_sentence(stats) +
-             burnin_sentence(stats) + "}")
+    L.append("\\caption{Equilibration analysis of equilibrium observables.  "
+             "$t_0$ is the equilibration time discarded; $g$ is the statistical "
+             "inefficiency; $N$ is the total number of production frames over "
+             "the three replicates, after discarding those before $t_0$.  "
+             "$\\sigma_\\mathrm{btw}/\\sigma_\\mathrm{wth}$ is the standard "
+             "deviation of the three replicate means divided by the RMS of their "
+             "within-run standard errors (SD$/\\sqrt{(T-t_0)/g}$ per replicate), "
+             "which determines whether the runs sample the same distribution "
+             "and can be pooled, or whether the difference between replicates "
+             "is larger.  Below 1 the replicates are consistent and are "
+             "\\emph{pooled}; at or above 1 they are averaged as "
+             "\\emph{replicates}.  $N_\\mathrm{eff}$ is the number of "
+             "independent samples used to compute the 95\\% confidence "
+             "interval.  The $\\langle\\delta\\theta^{2}\\rangle$ rows are the "
+             "per-frame spread of lipid tilt angles, whose $t_0$ and $g$ set "
+             "the production span and block size used for the tilt modulus "
+             "$\\kappa_\\theta$; their $\\sigma_\\mathrm{btw}/\\sigma_\\mathrm{wth}$, "
+             "averaging and $N_\\mathrm{eff}$ refer to $\\kappa_\\theta$, whose "
+             "within-run error is a block-averaged SEM, so when pooled "
+             "$N_\\mathrm{eff}$ is the total number of blocks over the three "
+             "replicates.}")
     L.append("\\label{tab:equilibration}")
     L.append("\\end{table}")
     return "\n".join(L) + "\n"
 
 
-def preview(stats):
-    hdr = ["lipid", "ff", "obs", "t0(ns)", "g(frames)", "N", "Neff"]
+def preview(stats, regimes, blocks):
+    hdr = ["lipid", "ff", "obs", "t0(ns)", "g(frames)", "N", "btw/wth",
+           "averaging", "Neff"]
     print("  ".join("%-13s" % h for h in hdr))
     for lipid in LIPIDS:
         for ff, fflabel in FORCEFIELDS:
@@ -190,22 +212,28 @@ def preview(stats):
                 r = rows_for(stats, ff, lipid, okey)
                 lab = PLAIN.get(okey, okey)
                 if r is None:
-                    vals = ["--"] * 4
+                    vals = ["--"] * 3 + [ratio_cell(regimes, ff, lipid, okey),
+                                         regime_cell(regimes, ff, lipid, okey),
+                                         "--"]
                 else:
                     t0, g, nsamp, neff = r
-                    vals = ["%.0f±%.0f" % (np.mean(t0), np.std(t0)),
-                            "%.1f±%.1f" % (np.mean(g), np.std(g)),
-                            "%.0f" % np.mean(nsamp),
-                            "%.0f±%.0f" % (np.mean(neff), np.std(neff))]
+                    vals = ["%.0f±%.0f" % (np.mean(t0), np.std(t0, ddof=1)),
+                            "%.1f±%.1f" % (np.mean(g), np.std(g, ddof=1)),
+                            "%d" % int(round(np.sum(nsamp))),
+                            ratio_cell(regimes, ff, lipid, okey),
+                            regime_cell(regimes, ff, lipid, okey),
+                            n_cell(used_n(regimes, blocks, ff, lipid, okey, neff))]
                 print("  ".join(["%-13s" % lipid, "%-13s" % fflabel, "%-13s" % lab]
                                 + ["%-13s" % v for v in vals]))
 
 
 def main():
     stats = load_stats()
-    preview(stats)
+    regimes = met.regimes()
+    blocks = load_blocks()
+    preview(stats, regimes, blocks)
     out = DATA / "equilibration_summary_table.tex"
-    out.write_text(build_latex(stats))
+    out.write_text(build_latex(stats, regimes, blocks))
     print("\nwrote %s" % out)
 
 

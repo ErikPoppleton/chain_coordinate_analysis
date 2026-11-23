@@ -4,7 +4,7 @@
 GROMACS writes every Lipid21 residue with resid ``1``, and a lipid's three
 residues (tail ``OL``/``MY`` -- head ``PC``/``PGR`` -- tail) sit contiguously,
 so the sn-2 tail of one lipid and the sn-1 tail of the next merge into a single
-80-atom residue as far as MDAnalysis is concerned.  That breaks every tool that
+residue (80 atoms for ``MY``, 100 for ``OL``) as far as MDAnalysis is concerned.  That breaks every tool that
 reasons per residue: `make_lipidator_index` and `tilt_convert` both refuse
 (``lipid residues not a multiple of 3``), and `core_thickness` would key its
 leaflet assignment off the wrong atoms.

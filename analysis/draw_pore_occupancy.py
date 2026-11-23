@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Panel painters for the main-text **pore-occupancy** figure (Figure 4).
 
-``count_rows(bases, suffix)``      per-row integer count ceiling + the shared
+``count_rows(panels, bases, suffix)``
+                                   per-row integer count ceiling + the shared
                                    time axis, read from the nine
                                    ``poredens_counts_{ff}_{lipid}.npz``.
 ``draw_counts_cell(axt, axh, ...)``one cell of the occupancy grid: the

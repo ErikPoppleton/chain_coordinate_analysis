@@ -37,8 +37,9 @@ The DOPC reference group has no ensemble, so it takes the force field's solid
 categorical colour (``palette.COLORS``).
 
 Reads ``data/{lipprops_*,diffusion,rdf}.npz``, ``data/stability.json`` and
-``data/equilibrium_timeseries_stats.json`` from both this project and the parent
-one.  numpy + matplotlib only.
+``data/equilibrium_timeseries_stats.json`` from this project, plus the parent
+project's ``lipprops_*.npz`` and ``equilibrium_timeseries_stats.json`` for the
+DOPC reference.  numpy + matplotlib only.
 """
 
 import json
@@ -242,7 +243,7 @@ def draw_diffusion(ax, species="lipid", reference=True, verbose=False):
     per run, so there is no within-run series to autocorrelation-correct (the
     parent project's convention).  The log axis is not decoration: the HMMM
     lipids diffuse 10-30x faster than a full DOPC bilayer and DCLE another
-    10-20x faster again, which a linear axis would render as one tall bar and
+    10-30x faster again, which a linear axis would render as one tall bar and
     a row of stubs.
     """
     records = stab.load()
@@ -305,7 +306,7 @@ def draw_rdf(ax, pair, verbose=False):
 
     The plateau is not 1: MDAnalysis normalises g(r) against the box-average
     density and DCLE is confined to the bilayer core, so the bulk level sits
-    near 1.7-2.0.  Peak positions are unaffected; heights are scaled by that
+    near 1.5-2.0.  Peak positions are unaffected; heights are scaled by that
     factor.
     """
     records = stab.load()

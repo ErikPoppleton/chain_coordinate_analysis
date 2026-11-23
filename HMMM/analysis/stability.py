@@ -15,7 +15,7 @@ The rule, fixed after looking at all six CHARMM/AMBER conditions:
     trajectory.
 
 That threshold sits in the gap between the runs that hold together (plateaux at
-0.17 / 0.35 / 0.55-0.75 nm, no step) and the two that do not (clean steps out of
+~0.2 nm posres / ~0.45 nm AMBER NPAT / 0.55-0.65 nm other NPT/NPAT, no step) and the two that do not (clean steps out of
 their plateau to 1.0-1.6 and to 20 nm), and it reproduces the by-eye
 classification of every run.  It is an *absolute* threshold, so it is tied to
 the ``--nbins`` grid ``thickness_variation.py`` used; the relative alternative

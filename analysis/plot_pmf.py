@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Plot PMF profiles as three horizontal panels -- DOPC, DMPC, DMPG across the
 columns of one figure.  Within each panel the three force fields (CHARMM, AMBER,
-SLipids) are overlaid, each shifted so its minimum energy is zero; the five 20 ns
-partial profiles (if present) are drawn faintly behind the full curve.  Force
+SLipids) are overlaid, each shifted so its minimum energy is zero; the five partial
+profiles (10 ns windows; 20 ns for DMPC; if present) are drawn faintly behind the full curve.  Force
 fields / lipids with no profile data are simply absent from their panel."""
 
 from pathlib import Path
@@ -22,7 +22,8 @@ PLOTS = ROOT / "plots"
 # Lipids across the columns; profiles are named "{ff}_{lipid}_profile.xvg".
 
 # Each full profile is accompanied by five partial profiles computed from
-# consecutive 20 ns windows (0-20, 20-40, 40-60, 60-80, 80-100 ns), sharing the
+# consecutive windows (10 ns windows of the 50 ns run: 0-10 ... 40-50 ns; for
+# DMPC 20 ns windows of 100 ns: 0-20 ... 80-100 ns), sharing the
 # full profile's basename, e.g. "charmm_DMPC_profile.xvg" ->
 # "charmm_DMPC_part1_profile.xvg" ... "charmm_DMPC_part5_profile.xvg".
 N_PARTS = 5

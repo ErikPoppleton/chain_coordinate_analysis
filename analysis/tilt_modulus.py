@@ -3,22 +3,25 @@
 modulus** chi from the tilt-angle distribution, using the ``ost_pymodules``
 ``lipid_analysis`` code (Johner / Harries / Khelashvili method).
 
-Reads the ``data/tilt_{ff}_{lipid}.{pdb,dcd}`` pair written by ``tilt_convert.py``
-(topology PDB + DCD).  For each system it:
+Reads the ``data/tilt_{ff}_{lipid}_{rep}.{pdb,dcd}`` pair written by
+``tilt_convert.py`` (topology PDB + DCD).  For each system it:
 
   1. loads the topology + trajectory into an OST CoordGroup;
   2. assigns each atom an element from its name (C/H/O/N/P) so the density map
      used to find the water/lipid interface is correct;
-  3. runs ``AnalyzeLipidTiltAndSplay`` -- which builds the water/lipid interface,
-     assigns a membrane normal to every lipid in every frame, and returns the
-     per-lipid tilt angle (angle between the head->tail vector and that normal);
+  3. runs the tilt half of the library's ``AnalyzeLipidTiltAndSplay`` directly
+     (``GetBoundaryBetweenViews`` -> ``AssignNormalsToLipids`` ->
+     ``AnalyzeLipidTilts``; the wrapper's splay step is skipped) -- which builds
+     the water/lipid interface, assigns a membrane normal to every lipid in
+     every frame, and returns the per-lipid tilt angle (angle between the
+     head->tail vector and that normal, in radians);
   4. pools all lipid tilts and fits the tilt PMF  -log[P(a)/sin(a)]  with
-     ``FitTiltDistribution`` to extract chi (in units of k_B T).
+     ``FitTiltDistribution`` to extract chi (in k_B T/rad^2, per lipid).
 
 Runs under the OpenStructure Python 2.7 environment, e.g.::
 
-    ~/.local/bin/ost analysis/tilt_modulus.py data/tilt_charmm_DMPC
-    /path/to/openstructure/bin/python analysis/tilt_modulus.py data/tilt_charmm_DMPC --stride 5
+    ~/miniconda3/envs/openstructure/bin/python analysis/tilt_modulus.py data/tilt_charmm_DMPC_1
+    ~/miniconda3/envs/openstructure/bin/python analysis/tilt_modulus.py data/tilt_charmm_DMPC_1 --density-stride 10
 
 Writes ``data/tilt_moduli.json`` per replicate: the canonical pooled-fit ``chi``
 + its fit error ``dchi``, plus an **autocorrelation-aware within-run error** --
@@ -32,9 +35,11 @@ expensive OST tilt pass, and the library's tilt-distribution / PMF PNGs into
 ``plots/tilt/``.
 
 The head->tail and neutral-plane selections per lipid:
-  * head      = phosphate (CHARMM/SLipids ``P``, AMBER ``P31``)
-  * tail      = terminal acyl methyls of both chains (COM); DOPC C18, DMPx C14
-  * neutral   = glycerol ``C2`` (splay center-of-mass distance reference)
+  * head      = phosphate + glycerol ``C2`` (COM; CHARMM/SLipids ``P``, AMBER
+                ``P31``) -- ~the P/C2 midpoint
+  * tail      = last three acyl carbons of each chain (COM of six atoms);
+                terminal carbon DOPC C18, DMPx C14
+  * neutral   = glycerol ``C2`` (splay reference only; unused for the tilt)
 """
 
 import os
@@ -120,7 +125,7 @@ def selections(ff, lipid):
     Matches Khelashvili et al. 2013 (JCTC 9:3866, reference/khelashvili2013-
     calculating.pdf): for all-atom PC lipids the director t connects **the
     midpoint between the phosphate and the backbone glycerol-C2 atom** to **the
-    geometric COM of the terminal carbons of the two chains**.  The tilt is the
+    geometric COM of the last three carbons of each of the two chains**.  The tilt is the
     angle between t and the bilayer normal; chi is fit from
     PMF(a) = -kT ln[P(a)/sin a] and reported in kT/rad^2 (no area normalisation
     -- area only enters the splay/bending modulus).
@@ -308,7 +313,7 @@ def analyze(basis, stride=1, density_stride=10, nbins=90,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("bases", nargs="+",
-                    help="data/tilt_{ff}_{lipid} basename(s) (no extension)")
+                    help="data/tilt_{ff}_{lipid}_{rep} basename(s) (no extension)")
     ap.add_argument("--stride", type=int, default=1,
                     help="use every Nth trajectory frame (default 1)")
     ap.add_argument("--density-stride", type=int, default=10,

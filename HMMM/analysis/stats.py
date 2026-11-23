@@ -119,7 +119,7 @@ def main():
     for obs in OBSERVABLES:
         if not results[obs]:
             continue
-        print("\n=== %s  (t0 and g in frames; %.3g ns per frame) ===" % (obs, DT_NS))
+        print("\n=== %s  (g in frames, t0 in ns; %.3g ns per frame) ===" % (obs, DT_NS))
         print("  %-16s %5s %8s %18s %20s" % ("system", "N", "t0 (ns)",
                                              "g_prod (mean+-SD)",
                                              "Neff_max (mean+-SD)"))

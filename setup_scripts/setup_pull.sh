@@ -39,7 +39,7 @@ fi
 
 # Gromacs had a bug with default groups in make_ndx which was fixed in 2022, so we need a newer version to make the initial file
 module purge
-module load gromacs/2025.1 && wait $!
+module load gromacs/2026.3 && wait $!
 echo "$SEL System" | gmx trjconv -f step6.6_equilibration.gro -s step6.6_equilibration.tpr -pbc mol -center -o npt.gro
 echo -e "q" | gmx make_ndx -f npt.gro -o pull.ndx
 
@@ -73,6 +73,7 @@ cp ${SCRIPT_DIR}/../setup_files/umbrella_${FF}.mdp ./umbrella.mdp
 cp ${SCRIPT_DIR}/../setup_files/submit_npt.sh .
 cp ${SCRIPT_DIR}/../setup_files/submit_umbrella.sh .
 
-# Change the fixed pore center to (3, 3)
+# Load the chain-coordinate settings from submit_pull.sh (35 slices, pore centre
+# frozen at (3, 3) nm) so grompp sees the same SLICE_COORD_* environment as mdrun
 eval "$(cat submit_pull.sh | grep 'export SLICE')"
 $GMX grompp -f pull.mdp -c npt.gro -p topol.top -n pull.ndx -o pull.tpr

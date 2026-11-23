@@ -55,7 +55,7 @@ def aggregate():
                 [r.get("kappa_block_sem", float("nan")) for r in rs],
                 [r.get("n_blocks") for r in rs])
             agg[k] = (float(vals.mean()),
-                      float(vals.std(ddof=0)) if len(vals) > 1 else 0.0,
+                      float(vals.std(ddof=1)) if len(vals) > 1 else 0.0,
                       float(ci["ci_half"]) if ci else 0.0, len(vals))
         return agg
     path = DATA / "lipidator_moduli.json"
@@ -65,8 +65,8 @@ def aggregate():
     by = defaultdict(list)
     for r in json.load(open(path)).values():
         by[(r["ff"], r["lipid"])].append(r["tilt_kt_per_nm2"])
-    return {k: (float(np.mean(v)), float(np.std(v)) if len(v) > 1 else 0.0,
-                float(np.std(v)) if len(v) > 1 else 0.0, len(v))
+    return {k: (float(np.mean(v)), float(np.std(v, ddof=1)) if len(v) > 1 else 0.0,
+                float(np.std(v, ddof=1)) if len(v) > 1 else 0.0, len(v))
             for k, v in by.items()}       # no block SEM -> CI falls back to SD
 
 

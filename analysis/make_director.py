@@ -3,7 +3,7 @@
 of our force fields, from the atom NAMES of a recipe (so it is not tied to one
 force field's atom numbering).
 
-Recipe (matched to the shipped CHARMM/SLipids library so all force fields are
+Recipe (matched to the shipped CHARMM library so all force fields are
 comparable):
   * head [P][1]     : phosphate + glycerol C2 + both ester carbonyls
                       + the first two acyl carbons of each chain
@@ -21,8 +21,8 @@ Atom-name schemes:
 The atom numbers written are 1-based positions within a lipid, counted from its
 first atom (what the toolkit adds the index-file offset to).
 
-    conda run -n lipid64 python analysis/make_director.py            # amber + slipids
-    conda run -n lipid64 python analysis/make_director.py --check-charmm
+    PYTHONNOUSERSITE=1 conda run -n lipid64 python analysis/make_director.py   # fill gaps in charmm/slipids/amber.ldx
+    PYTHONNOUSERSITE=1 conda run -n lipid64 python analysis/make_director.py --check-charmm
 """
 
 import sys

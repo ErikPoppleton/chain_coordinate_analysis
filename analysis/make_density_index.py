@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Build per-force-field/-lipid GROMACS index files for ``gmx density`` from the
 full-system (water + ion) ``traj/{ff}_{lipid}.gro`` topologies (one replicate's
-downloaded ``md.gro`` per system), one ``data/density_{ff}_{lipid}.ndx`` each.
+downloaded ``md.gro`` per system), one ``data/density_{ff}_{lipid}.ndx`` each
+(``{lipid}`` is the gro's own label, so ``traj/amber_DMPG_JC.gro`` gets its own file).
 Groups written:
 
     water          all water atoms          (TIP3 / TP3 / SOL)
     sodium         Na+ ions                 (SOD / Na+ / NA)
+    potassium      K+ ions                  (POT / K+)
     magnesium      Mg2+ ions                (MG)
     calcium        Ca2+ ions                (CAL / CA)
     phosphorus     lipid phosphate P        (name P / P31)
@@ -47,7 +49,7 @@ from MDAnalysis.selections.gromacs import SelectionWriter
 
 # Force-field vocabulary lives in lipiddefs; re-exported here because the other
 # index builders import it from this module.
-from lipiddefs import (SCHEME, WATER, SODIUM, POTASSIUM, MAGNESIUM, CALCIUM,
+from lipiddefs import (label_from_path, SCHEME, WATER, SODIUM, POTASSIUM, MAGNESIUM, CALCIUM,
                        CHARMM_IONS,
                        PHOSPHATE_NAMES as PHOSPHATE,
                        TAIL_NC, AMBER_HEAD, AMBER_TAIL,
@@ -126,7 +128,8 @@ def process(gro, out_dir):
     u = mda.Universe(str(gro))
     ff, scheme, lipid = detect(u.atoms.resnames)
     groups = build_groups(u, scheme, lipid)
-    out = out_dir / f"density_{ff}_{lipid}.ndx"
+    _, label = label_from_path(gro, lipid, ff) or (ff, lipid)
+    out = out_dir / f"density_{ff}_{label}.ndx"
     written = []
     with SelectionWriter(str(out), mode="w") as ndx:
         for gname, ag in groups:
@@ -135,7 +138,7 @@ def process(gro, out_dir):
                 continue
             ndx.write(ag, name=gname)
             written.append((gname, ag.n_atoms))
-    print(f"wrote {out}  ({ff} {lipid})")
+    print(f"wrote {out}  ({ff} {label})")
     for gname, n in written:
         print(f"    {gname:16s} {n:7d} atoms")
     return out

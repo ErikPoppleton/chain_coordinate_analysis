@@ -19,6 +19,8 @@ chains are separate residues that share the carbon naming ``C1x``.  Almost every
 force-field conditional in the repo is really a test on this scheme.
 """
 
+import os
+
 # --- the systems -----------------------------------------------------------
 
 # Force-field keys, in the canonical order used by every plot/table.  The keys
@@ -49,6 +51,24 @@ def base_lipid(label):
         if head in LIPIDS:
             return head
     return label
+
+
+def label_from_path(path, lipid, ff=None):
+    """``(ff, label)`` from a structure file named ``{ff}_{label}.gro``, else None.
+
+    ``label`` may carry a condition (``traj/amber_DMPG_JC.gro`` -> ``("amber",
+    "DMPG_JC")``); it is accepted only if its base lipid is ``lipid`` (and its
+    force field ``ff``, when given), so an unrelated name such as ``md.gro``
+    gives None and the caller falls back to the detected ``{ff}_{lipid}``.
+    Index builders name their output from this, so two conditions of one
+    lipid cannot overwrite each other's file.
+    """
+    stem = os.path.splitext(os.path.basename(str(path)))[0]
+    head, _, label = stem.partition("_")
+    if head in FORCEFIELDS and (ff is None or ff == head) \
+            and base_lipid(label) == lipid:
+        return head, label
+    return None
 
 
 class _ByLipid(dict):

@@ -34,7 +34,8 @@ SETUP_FILES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 SUBMIT_NPT = os.path.join(SETUP_FILES, 'submit_npt.sh')
 SUBMIT_UMBRELLA = os.path.join(SETUP_FILES, 'submit_umbrella.sh')
 
-importantfiles = ['umbrella_npt.mdp', 'umbrella.mdp', 'md.xtc', 'pull.tpr', 'pull.ndx', toploc]
+importantfiles = ['umbrella_npt.mdp', 'umbrella.mdp', 'md.xtc', 'pull.tpr', 'pull.ndx', toploc,
+                  'submit_pull.sh']   # read below for the frozen pore centre X/Y
 missing  = [f for f in importantfiles if not os.path.isfile(f)]
 missing += [f for f in (SUBMIT_NPT, SUBMIT_UMBRELLA) if not os.path.isfile(f)]
 assert not missing, f"Files not found: {', '.join(missing)}"
@@ -82,7 +83,7 @@ ax.hlines(target_cv, xmin=np.zeros_like(target_cv), xmax=np.full(len(target_cv),
 ax.plot(pull_data[0], pull_data[1], c='k', linewidth=0.5)
 ax.scatter(pull_data[0][target_id], pull_data[1][target_id], s=3)
 ax.set_ylabel(r'$\xi$')
-ax.set_xlabel('Frames')
+ax.set_xlabel('Time (ps)')
 fig.savefig('umbrella_frames.png', dpi=300)
 
 # Create a run directory for each umbrella

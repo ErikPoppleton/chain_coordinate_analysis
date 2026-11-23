@@ -2,8 +2,8 @@
 """Dependency-light autocorrelation / block-averaging primitives, shared by the
 equilibrium-statistics tooling.
 
-This module is deliberately **pure numpy and Python 2/3 compatible** (no
-f-strings, no pymbar): it is imported both by ``stats.py`` (Python 3, base env)
+This module is deliberately **numpy-only at import and Python 2/3 compatible**
+(no f-strings, no pymbar; only ``t95`` imports scipy, lazily): it is imported both by ``stats.py`` (Python 3, base env)
 and by ``tilt_modulus.py``, which runs under the OpenStructure **Python 2.7**
 interpreter where pymbar is unavailable.  Keeping the core estimator here means
 the tilt pipeline can compute a statistical inefficiency (hence a block size for
@@ -110,18 +110,17 @@ def block_sem(values, ddof=1):
 
 
 # --- Student-t critical value (two-sided 95%) --------------------------------
-# Hardcoded t_{0.975, dof} so no scipy dependency is pulled into the numpy-only
-# table / plot scripts.  Interpolated in dof; -> 1.96 asymptotically.
-_T95_DOF = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 24, 30, 40, 60,
-                     120, 1e9], dtype=float)
-_T95_VAL = np.array([12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306,
-                     2.262, 2.228, 2.179, 2.131, 2.086, 2.064, 2.042, 2.021,
-                     2.000, 1.980, 1.960], dtype=float)
-
-
 def t95(dof):
-    """Two-sided 95% Student-t critical value for ``dof`` degrees of freedom."""
-    return float(np.interp(max(1.0, float(dof)), _T95_DOF, _T95_VAL))
+    """Two-sided 95% Student-t critical value for ``dof`` degrees of freedom.
+
+    ``scipy.stats.t.ppf(0.975, dof)``, exact at every dof (-> 1.96
+    asymptotically).  scipy is imported here rather than at module level so
+    that importing ``autocorr`` stays numpy-only for the callers that never
+    need a CI (the OpenStructure py2.7 tilt scripts use only ``g`` and the
+    block SEM).
+    """
+    from scipy.stats import t as _student_t
+    return float(_student_t.ppf(0.975, max(1.0, float(dof))))
 
 
 def hierarchical_ci_from_estimates(means, sems, neffs=None):

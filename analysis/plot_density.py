@@ -28,11 +28,11 @@ DATA = ROOT / "data"
 PLOTS = ROOT / "plots"
 
 
-# Fixed group order + display colour.  Water blue, sodium purple, magnesium
-# green, calcium teal, phosphorus orange; the three carbons in greys darkest
+# Fixed group order + display colour.  Water blue, sodium purple, potassium
+# red, magnesium green, calcium teal, phosphorus orange; the three carbons in greys darkest
 # (glycerol C2, nearest the head) -> lightest (terminal C, the tail end).
 # Mg/Ca dropped: only 1-4 atoms, so peak-normalising just amplifies noise into
-# an already-busy head-group region (Na, P, glycerol C2).
+# an already-busy head-group region (Na/K, P, glycerol C2).
 GROUPS = ["water", "sodium", "potassium", "phosphorus",
           "glycerol_C2", "midpoint_C", "terminal_C"]
 COLORS = {

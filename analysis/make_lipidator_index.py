@@ -67,7 +67,7 @@ def write_ndx(ff, lipid, firsts):
         for i in range(0, len(firsts), 15):
             f.write(" ".join(str(x) for x in firsts[i:i + 15]) + "\n")
     print("wrote %s  ([ %s ], %d lipids, first index %d)"
-          % (out, lipid, len(firsts), firsts[0]))
+          % (out, base_lipid(lipid), len(firsts), firsts[0]))
 
 
 def main():

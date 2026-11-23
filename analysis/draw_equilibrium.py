@@ -13,6 +13,13 @@ Panels
                            with pairwise significance brackets.
 ``draw_diffusion(ax)``     grouped bars of the lateral diffusion coefficient D
                            (um^2/s), mean +- SD across the three replicates.
+``draw_kappa(ax)``         grouped bars of the Lipidator tilt modulus
+                           kappa_theta (kJ/mol/nm^2), hierarchical 95% CI, with
+                           pairwise significance brackets.
+``draw_scd(ax, lipid)``    per-carbon -S_CD profile (g_lomepro) for one lipid,
+                           mean over replicates +- SD band.
+``draw_dhc_traj(ax)``      per-frame d_HC(t) for one lipid (no longer used by
+                           Figure 1; kept for reference).
 
 What the boxes and the stars mean are **two different things**, deliberately:
 
@@ -410,10 +417,11 @@ def draw_dhc_traj(ax, lipid="DMPG", verbose=False):
     5 ns rolling mean on top), each a different shade of its force field's
     colour -- the same light->dark ramps ``plot_close_pullx.py`` uses for its
     10 closing replicates (``palette.CMAPS``), sampled ``[::4]`` out of those
-    ten shades so three well-separated ones come out.  This is the point of the
-    panel: it shows the
-    slow acyl-chain ordering that pymbar discards as burn-in for the DMPGs, and
-    the run-to-run spread behind their between-run error bars.  d_HC stands in
+    ten shades so three well-separated ones come out.  The panel was built to
+    show the slow acyl-chain ordering that pymbar discarded as burn-in for the
+    old-ion (Na+ JC) DMPGs, and the run-to-run spread behind their between-run
+    error bars; the K+ rebuild flattened that, so Figure 1 no longer uses it
+    (the SI ion figure has its own two-condition copy).  d_HC stands in
     for the chain order parameter here -- the two are strongly correlated, and
     d_HC is the one available per frame.
     """

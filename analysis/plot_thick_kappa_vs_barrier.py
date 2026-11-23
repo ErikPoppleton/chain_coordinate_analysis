@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Scatter two equilibrium membrane properties -- the hydrophobic-core thickness
 d_HC and the Lipidator/ReSiS tilt modulus kappa_theta -- against the
-**pore-nucleation energy barrier** (the min->max range of that system's PMF
-profile), as a single 1x3 row: d_HC panel, kappa_theta panel, and a legend in the
-third slot.
+**pore-nucleation energy barrier** (the climb from the PMF basin to its
+pore-side peak, ``draw_pore_energy.barrier()``), as a single 1x2 row of square
+panels (d_HC, kappa_theta) under a two-row legend.
 
-A trimmed companion to ``plot_property_vs_barrier.py`` (which shows all seven
+A trimmed companion to ``plot_property_vs_barrier.py`` (which shows six
 properties); the property means and per-system barriers come from the same
-helpers, so the two stay consistent.  Error bars: d_HC carries the hierarchical
-95% CI (autocorrelation-aware) from ``collect()``, kappa_theta the SD across
-replicates.  Points are **coloured by force field** (palette) and **shaped by
+helpers, so the two stay consistent.  Error bars: both d_HC and kappa_theta
+carry the hierarchical 95% CI (autocorrelation-aware) from ``collect()``.  Points are **coloured by force field** (palette) and **shaped by
 lipid**.
 
 Requires numpy + matplotlib (+ the same data as the summary table + the PMFs).
@@ -66,7 +65,7 @@ from draw_pore_energy import barrier  # noqa: E402
 
 
 def main():
-    rows, _ = met.collect()                     # {(ff,lipid): {prop: (mean, sd)}}
+    rows, _ = met.collect()                     # {(ff,lipid): {prop: (mean, err)}}
     barriers = {(ff, lip): barrier(ff, lip)
                 for ff, _, _ in FORCEFIELDS for lip in LIPIDS}
 
@@ -82,8 +81,8 @@ def main():
                 if b is None or cell is None:
                     continue
                 mean, err = cell
-                # barrier on y; property on x (d_HC: hierarchical 95% CI;
-                # kappa_theta: replicate SD).
+                # barrier on y; property on x (both with their hierarchical
+                # 95% CI).
                 ax.errorbar(mean, b, xerr=err, marker=LIPID_MARKERS[lip],
                             color=color, mec="black", mew=0.4, ms=7,
                             capsize=3, linestyle="none")

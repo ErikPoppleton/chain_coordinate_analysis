@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot all 'close' pull-COM (.xvg) trajectories: Position (nm) vs Time (ps).
+"""Plot all 'close' pullx (.xvg) trajectories: chain coordinate xi vs Time (ps).
 
 One figure per lipid (DOPC, DMPC, DMPG).  Within each figure the three force
 fields (CHARMM, AMBER, SLipids) get their own panel with a single-hue

@@ -9,7 +9,7 @@ error bars, plus a manuscript summary table and an SI equilibration table — an
 the **pore-formation** simulations (§4) — PMFs along the chain coordinate ξ,
 pore geometry and occupancy, and pore metastability.
 
-This README documents what actually happened, there are ocassionally conventions/decisions that look insane in hindsight (duplicated trajectory files, thickness being computed multiple times, the local/cluster file paths, some things in scripts while others were run interactivley). If there's some portion of this you would actually use, open a GitHub issue and I'll try to clean it up for you.
+This README documents what actually happened, there are occasionally conventions/decisions that look insane in hindsight (duplicated trajectory files, thickness being computed multiple times, the local/cluster file paths, some things in scripts while others were run interactively). If there's some portion of this you would actually use, open a GitHub issue and I'll try to clean it up for you.
 
 > **Scope.** This README covers the **analysis** stage: you have the
 > trajectories and want to reproduce the tables and figures. Producing them
@@ -33,7 +33,7 @@ The analysis described here was split across two machines because of difficultie
 | GROMACS 2026.3  (reads the `tpx v138` `.tpr`) | **cluster** | Trajectory wrangling, `gmx density` |
 | `g_lomepro` | **cluster** | `lipid_properties.py` |
 | OpenStructure + OST_pymodules (Python 2.7)| **local** | `tilt_modulus.py` |
-| Lipidator `resis` binary | **local** | `tilt_modulus.py` |
+| Lipidator `resis` binary | **local** | `run_lipidator.py`, `run_lipidator_blocks.py` |
 | MDAnalysis + lipyphilic (Python 3) | both | most scripts |
 
 Because this repository reflects what was actually run rather than adding a complex path resolver after-the-fact, the scripts in this repo require **two
@@ -41,8 +41,8 @@ copies of the same trajectories** depending on where the original analysis was r
 
 | Copy | Path convention | Contents | Consumed by |
 |---|---|---|---|
-| **A — cluster, lipid-only** | `~/Simulations/{ff}_{lipid}/eq{i}/` | `memb.gro` + `inbox.xtc` (MEMB group only, waters removed) | `lipid_properties.py`, `g_lomepro`, `gmx density` |
-| **B — local, full system** | `traj/{ff}_{lipid}{i}.xtc` (+ shared `traj/{ff}_{lipid}.gro`) | full system incl. water/ions | `tilt_convert.py`, `core_thickness.py`, `run_lipidator*.py` |
+| **A — cluster, lipid-only** | `~/Simulations/{ff}_{lipid}/eq{i}/` | `memb.gro` + `inbox.xtc` (MEMB group only, waters removed) | `lipid_properties.py`, `g_lomepro` |
+| **B — local, full system** | `traj/{ff}_{lipid}{i}.xtc` (+ shared `traj/{ff}_{lipid}.gro`) | full system incl. water/ions | `tilt_convert.py`, `core_thickness.py`, `run_lipidator*.py`, `ion_binding.py`; cluster-side as `eq{i}/full.xtc` for `gmx density` |
 
 `{ff}` ∈ `{charmm, amber, slipids}`, `{lipid}` ∈ `{DOPC, DMPC, DMPG}`, `{i}` ∈
 `{1, 2, 3}` (replicates). **The filename convention is load-bearing** — the
@@ -74,7 +74,7 @@ with:
 
 | Package | Version | Needed by |
 |---|---|---|
-| Python | 3.13 | everything (except the tilt-χ compute) |
+| Python | 3.13–3.14 | everything (except the tilt-χ compute) |
 | numpy | 2.5 | everything |
 | scipy | 1.18 | (MDAnalysis / pymbar dependency) |
 | MDAnalysis | 2.10 | index building, lipid properties, core thickness, tilt conversion, lipidator blocks |
@@ -147,9 +147,40 @@ Pull down, for the local branches (B, C, D and the index builders below):
 
 - every replicate's `full.xtc` → `traj/{ff}_{lipid}{i}.xtc`;
 - **one** replicate's full-system `md.gro` per system → `traj/{ff}_{lipid}.gro`
-  (atom order is identical across replicates).
+  (atom order is identical across replicates, so one shared file, no rep number).
+
+```bash
+CLUSTER=user@cluster.example.org      # your ssh target
+REMOTE=~/Simulations                  # the Simulations/ root on the cluster
+for ff in charmm amber slipids; do
+    for l in DMPC DOPC DMPG; do
+        for i in 1 2 3; do
+            scp ${CLUSTER}:${REMOTE}/${ff}_${l}/eq${i}/full.xtc traj/${ff}_${l}${i}.xtc;
+        done;
+        scp ${CLUSTER}:${REMOTE}/${ff}_${l}/eq1/md.gro traj/${ff}_${l}.gro;
+    done;
+done
+```
+
+**The topology is `md.gro`, not `memb.gro`.** Step 0a leaves a `memb.gro`
+in the same directory, but that is the lipid-only copy-A topology: it does not
+match `full.xtc` (MDAnalysis refuses with "The topology and XTC trajectory files
+don't have the same number of atoms"), and without water and ions the density
+index cannot be built and the force field cannot be told apart for CHARMM vs
+SLipids. Check that the `.gro` atom count (line 2) equals the `.xtc`'s.
 
 The `.gro` files are not optional: MDAnalysis 2.10 cannot read the GROMACS 2026 `.tpr` format.
+
+**Additional conditions** (a variant of a lipid run differently: `DMPG_JC`, the
+Na⁺/Joung–Cheatham ion set, or `DMPC_noions`/`DOPC_noions`, no ions at all) use
+the same layout with the **label** in place of the lipid:
+`traj/{ff}_{label}{i}.xtc` + one shared `traj/{ff}_{label}.gro`
+(e.g. `traj/charmm_DMPC_noions1.xtc` and `traj/charmm_DMPC_noions.gro`). The
+part before the last `_` must be the lipid (`lipiddefs.base_lipid`); the
+scripts take the label wherever they take a lipid (`--lipids DMPC_noions`), and
+the index builders name their output after the `.gro`
+(`data/density_charmm_DMPC_noions.ndx`). In the loops here and in 0c, add the
+labels to the `l` list (assuming the cluster directory is `{ff}_{label}/`).
 
 **AMBER `.gro` files need their lipid residues renumbered.** GROMACS numbers
 every Lipid21 residue `1`, so MDAnalysis merges each lipid's sn-2 tail with the
@@ -227,6 +258,8 @@ for ff in charmm amber slipids; do
             echo "Membrane tails" | gmx density -f full.xtc -s md.tpr -n ../tail.ndx -center -o taildens.xvg;
             if [[ $l == "DMPG" ]]; then
                 echo "terminal_C water potassium phosphorus glycerol_C2 midpoint_C terminal_C" | gmx density -f full.xtc -s md.tpr -n ../density.ndx -center -ng 6 -o density.xvg;
+            elif [[ $l == *_noions ]]; then
+                echo "terminal_C water phosphorus glycerol_C2 midpoint_C terminal_C" | gmx density -f full.xtc -s md.tpr -n ../density.ndx -center -ng 5 -o density.xvg;
             else
                 echo "terminal_C water sodium magnesium calcium phosphorus glycerol_C2 midpoint_C terminal_C" | gmx density -f full.xtc -s md.tpr -n ../density.ndx -center -ng 8 -o density.xvg;
             fi
@@ -237,7 +270,9 @@ done
 ```
 
 The first group selected is the centering group (`Membrane`); the rest are the
-output groups (`-ng 8` for the eight density groups). `make_density_index.py`
+output groups (`-ng 8` for the eight PC-system groups, `-ng 6` for DMPG, `-ng 5`
+for the no-ion `DMPC_noions`/`DOPC_noions` conditions — add those labels to the `l`
+list). `make_density_index.py`
 skips an ion group that is absent from a system (`gmx density` errors on an
 empty group), so if it warned about one, drop that name from the selection and
 lower `-ng` for that system.
@@ -290,7 +325,7 @@ python analysis/make_director.py          # -> <lipidator-toolkit>/directors/*.l
 ```
 The new directors generated here have been [pull requested](https://github.com/allolio/lipidator-toolkit/pull/2) into the Lipidator repo, but at the time of writing, it has not been accepted.
 
-### Step E — equilibration statistics  *(local; needs pymbar + statsmodels)* — **needs A + B**
+### Step E — equilibration statistics  *(local; needs pymbar + statsmodels)* — **needs A + B + C**
 
 ```bash
 python analysis/stats.py                   # -> data/equilibrium_timeseries_stats.json
@@ -302,10 +337,11 @@ Observables are APL, d_HH, d_HC, the per-frame tilt spread ⟨δθ²⟩ (from Br
 C's `tilt_series_*.npz`), registration and S_CC — so run it **after** Branches
 A/B/C. **Run this before any table/plot below**, and before `refit_tilt_t0.py`
 and `run_lipidator_blocks.py`, all of which read t₀ from its JSON to drop the
-burn-in (critical for the slow-equilibrating AMBER/SLipids DMPG systems).
+burn-in (critical for any run with a long burn-in; after the potassium rebuild the
+longest is AMBER DMPG rep 3, t₀ ≈ 185 ns).
 
 ### Step F — tables & figures  *(local; needs numpy + matplotlib)*
-Requires all previous steps to have completed successfully and the `.npz`/`.dat` files to have been downloaded from the cluster-side `data/` directory.
+Requires all previous steps to have completed successfully and the `.npz`/`.dat` files to have been downloaded from the cluster-side `data/` directory. `make_equilibrium_table.py` also needs the nine `data/{ff}_{lipid}_profile.xvg` PMFs from §4a, for its ΔG_pore column.
 
 ```bash
 python analysis/plot_tilt_modulus.py         # -> tilt summary + plots/tilt_modulus.png
@@ -348,8 +384,8 @@ analysis only.
 
 ### 4a — PMFs along ξ  *(cluster, `gmx wham` from the fork)*
 
-The full-profile `gmx wham` submit script (`submit_wham.sh`) is placed in the simulation directory
-during setup. 
+The full-profile `gmx wham` submit script is `setup_files/submit_wham.sh`; copy it
+into each `{ff}_{lipid}/` directory (`setup_pull.sh` does not).
 
 The lists of pullx/tpr files required by `gmx wham` can be generated with:
 ```shell
@@ -370,7 +406,7 @@ source /path/to/gromacs-chain-coordinate/build/scripts/GMXRC.bash
 for i in {1..5}; do
 START=$(((i-1)));
 END=$((i));
-srun -n 1 -c 10 -t 01:00:00 --mem 16000 -p interactive --export=ALL $GMX wham -it tpr_files.dat -ix pullx_files.dat -o part${i}_profile.xvg -hist part${i}_hist.xvg -unit kJ -ac -oiact part${i}_iac.xvg -bs-method traj -bsres part${i}_bs.xvg -b ${START}0000 -e ${END}0000 &
+srun -n 1 -c 10 -t 01:00:00 --mem 16000 -p interactive --export=ALL $GMX wham -it tpr_files.dat -ix pullx_files.dat -o part${i}_profile.xvg -hist part${i}_hist.xvg -unit kJ -ac -oiact part${i}_iac.xvg -b ${START}0000 -e ${END}0000 &
 done
 ```
 
@@ -391,15 +427,17 @@ python analysis/plot_range_vs_time.py   # -> plots/range_vs_{time,starttime}_{li
 
 `pore_density.py` builds cylindrically-averaged **(radius, z)** density maps
 around the pore centre from the 200 ns ξ = 1 window, plus the per-frame count of
-atoms inside the CV cylinder (r = 0.9 nm, h = 2.7 nm — set at `grompp` time by the `SLICE_COORD_CYL_R`, `SLICE_COORD_N` and `SLICE_COORD_D` environment variables).
+atoms inside the CV cylinder (r = 0.9 nm, h = 2.7 nm — set at run time by the `SLICE_COORD_CYL_R`, `SLICE_COORD_N` and `SLICE_COORD_D` environment variables, which `mdrun` reads).
 
 It needs three files per run directory: `md.xtc` + `md.gro` (the **full**
 water+ion system) and `rerunerr.log`, the chain-coordinate rerun log, which
-prints `Cylinder center at (X/Y/Z): cx cy cz` for every frame. Generate `rerunerr.log with:
+prints `Cylinder center at (X/Y/Z): cx cy cz` for every frame. Generate `rerunerr.log` with:
 
 ```bash
 # in {ff}_{lipid}/umbrella23/, with $GMX = the gromacs-chain-coordinate gmx_mpi
-eval "$(cat submit_umbrella.sh | grep 'export SLICE')"
+read X < <(cat ../submit_pull.sh | grep "FREEZE_CYLINDER_X=" | cut -d "=" -f 2)
+read Y < <(cat ../submit_pull.sh | grep "FREEZE_CYLINDER_Y=" | cut -d "=" -f 2)
+eval "$(cat submit_umbrella.sh | grep 'export SLICE')"   # its X/Y lines use $X/$Y
 export SLICE_COORD_NST_OUTPUT=1
 $GMX mdrun -v -rerun md.xtc -s md.tpr -deffnm rerun -ntomp 1 &> rerunerr.log
 ```
@@ -456,7 +494,7 @@ Inputs are `snapshots/{ff}_{lipid}_last_conf.gro` (end-of-umbrella pore) and
 `{ff}_{lipid}_close.gro` (closed pore); a `*_renumbered.gro` is preferred where
 one exists. The chain-coordinate cylinder drawn in the `last` panels cannot be
 recomputed locally — it comes from the run's `slurm.*.err` via
-`cylinder_pml.sh` — so its geometry is read back out of the committed
+`cylinder_pml.sh` — so its geometry is read back out of
 `snapshots/{ff}_{lipid}_cyl_style.pml`, which stays the source of truth for it.
 The `cyl` command itself is the `~/.pymol/draw_cylinder.py` plugin loaded from
 `.pymolrc`, so do **not** run PyMOL with `-k`.
@@ -482,7 +520,7 @@ conda run -n lipid64 python analysis/core_thickness.py --lipids DMPG_JC
 conda run -n lipid64 python analysis/ion_binding.py --lipids DMPG DMPG_JC   # -> data/ion_binding.npz (g(r) + N(r))
 python analysis/run_lipidator.py --lipids DMPG_JC
 LIPIDS=DMPG_JC ./analysis/run_tilt.sh
-conda run -n base python analysis/stats.py --lipids DOPC DMPC DMPG DMPG_JC
+conda run -n base python analysis/stats.py --lipids DOPC DMPC DMPG DMPG_JC DOPC_noions DMPC_noions   # every label: the json is rewritten whole
 conda run -n base python analysis/stats.py --data-dir data/data_Na --lipids DMPG
 ~/miniconda3/envs/openstructure/bin/python analysis/refit_tilt_t0.py
 conda run -n lipid64 python analysis/run_lipidator_blocks.py --lipids DMPG_JC
@@ -496,11 +534,50 @@ by the plain `DMPG` name — the directory is the condition marker); everything
 computed locally is keyed by the `DMPG_JC` label in the shared `data/`. Order
 matters as usual: `stats.py` before `refit_tilt_t0.py` before the κ blocks.
 
+### Branch F — no-ion PC conditions  *(local + cluster)*
+
+The zwitterionic lipids were also run with **no ions at all**, under the labels
+`DOPC_noions` and `DMPC_noions` (all three force fields, 3 reps, 500 ns). They
+are handled exactly like `DMPG_JC`: the label replaces the lipid in every file
+name (`traj/{ff}_DMPC_noions{i}.xtc` + `traj/{ff}_DMPC_noions.gro`) and in every
+`data/` key, and the chemistry comes from the base lipid. Their lipid blocks are
+atom-for-atom identical to the ion systems', so the order, tail and Lipidator
+indices come out byte-identical to the ion systems' files; only the density
+index differs (water, no ion groups, so `gmx density -ng 5` — see Branch B).
+
+```bash
+python analysis/renumber_gro.py traj/amber_*_noions.gro          # AMBER only, once
+conda run -n lipid64 python analysis/make_density_index.py traj/*_noions.gro
+conda run -n lipid64 python analysis/make_tail_index.py traj/*_noions.gro
+python analysis/make_order_index.py traj/*_noions.gro
+conda run -n lipid64 python analysis/make_lipidator_index.py traj/*_noions.gro
+# copy density/tail/order .ndx cluster-side as in Step 0c, with l in DMPC_noions DOPC_noions
+conda run -n lipid64 python analysis/core_thickness.py --lipids DOPC_noions DMPC_noions
+python analysis/run_lipidator.py --lipids DOPC_noions DMPC_noions
+LIPIDS="DOPC_noions DMPC_noions" ./analysis/run_tilt.sh
+conda run -n base python analysis/stats.py --lipids DOPC DMPC DMPG DMPG_JC DOPC_noions DMPC_noions
+~/miniconda3/envs/openstructure/bin/python analysis/refit_tilt_t0.py
+conda run -n lipid64 python analysis/run_lipidator_blocks.py --lipids DOPC_noions DMPC_noions
+```
+
+The cluster-side lipyphilic `.npz` and the no-ions PMFs go in `data/noions/`
+(the directory is the condition marker, as `data/data_Na/` is for DMPG_JC):
+
+```bash
+conda run -n base python analysis/stats.py --data-dir data/noions --lipids DOPC_noions DMPC_noions
+python figures/figSI_noions.py                                  # -> plots/final/SI_noions.*
+```
+
+`ion_binding.py` does not apply (there are no cations). The cluster-side
+lipyphilic properties (Branch A, `--lipids DMPC_noions DOPC_noions`) and `gmx
+density` (Branch B) are run on the cluster as for the other systems.
+
 ### 4d — Equilibrium properties vs the pore barrier
 
 Each system's **pore-nucleation
-barrier** (the min→max range of its full PMF) scattered against the equilibrium
-properties from §3.
+barrier** (the climb from the PMF basin to the highest point on its pore side,
+`draw_pore_energy.barrier()` — *not* the min→max range, since every profile also
+rises toward ξ → 0) scattered against the equilibrium properties from §3.
 
 ```bash
 python analysis/plot_property_vs_barrier.py       # -> plots/property_vs_barrier.png (6 properties)
@@ -519,7 +596,7 @@ Point-estimate figures/tables use a **hierarchical 95% confidence interval**
 (`analysis/autocorr.py`, `hierarchical_ci*`): each replicate contributes a
 within-run error, combined with the between-replicate spread as
 `SE = sqrt(max(between_sd², within_sem²) / n)` — tight/pooled where replicates
-agree, honestly wide where they don't (e.g. AMBER DMPG). The within-run error is
+agree, honestly wide where they don't (e.g. SLipids DMPG). The within-run error is
 the autocorrelation-limited SEM (`SD/√Neff`, Chodera 2016) for per-frame
 observables (APL, d_HH, d_HC), and a block-averaged SEM for the tilt moduli
 (χ, κ). `D` and `⟨−S_CD⟩` — a single fitted scalar/profile per run — keep the SD
@@ -543,7 +620,7 @@ runs under Python 2.7), and every other script imports from it:
 | `DOUBLE_BOND`, `CHAIN_MID` | cis double-bond position per lipid (absent ⇒ saturated) and the mid-chain carbon used for the saturated density group |
 | `AMBER_HEAD`, `AMBER_TAIL` | AMBER head / tail residue names per lipid |
 | `PHOSPHATE_NAMES`, `PHOSPHATE_SEL` | the one-phosphorus-per-lipid selection (`P` / `P31`) |
-| `WATER`, `WATER_NAME`, `WATER_OXYGEN`, `SODIUM`, `MAGNESIUM`, `CALCIUM` | solvent/ion resnames (the water resname is also what pins the force field in `detect()`) |
+| `WATER`, `WATER_NAME`, `WATER_OXYGEN`, `SODIUM`, `POTASSIUM`, `CHLORIDE`, `MAGNESIUM`, `CALCIUM`, `CHARMM_IONS`, `ION_RESNAMES` | solvent/ion resnames (`detect()` pins the force field by the lipid residue layout first, then the water resname, then the CHARMM-only ion names) |
 | `lipid_resnames`, `chain_atom_names`, `midpoint_carbon`, `n_unsat` | the small helpers that turn the above into selections |
 
 So:
@@ -578,8 +655,8 @@ bibliography with the cited toolkit/`chodera2016simple` keys):
 
 | File | Contents |
 |---|---|
-| `equilibrium_summary_table.tex` | main manuscript table: APL, d_HH, d_HC, D, ⟨−S_CD⟩, χ, κ — mean ± hierarchical 95% CI |
-| `equilibration_summary_table.tex` | SI: per-observable t₀ / production window / N / N_eff (mean ± SD over reps) |
+| `equilibrium_summary_table.tex` | main manuscript table: APL, d_HH, d_HC, D, κ_θ, ΔG_pore — mean ± hierarchical 95% CI (D: ± SD; ΔG_pore: ± SD over the five partial PMFs) |
+| `equilibration_summary_table.tex` | SI: t₀ / g / N / N_eff for APL, d_HH, d_HC, ⟨δθ²⟩ (mean ± SD over reps) |
 
 **Key figures** (`plots/`):
 

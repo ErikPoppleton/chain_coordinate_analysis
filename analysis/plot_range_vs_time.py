@@ -7,12 +7,14 @@ lipid (DOPC, DMPC, DMPG); lipids with no profile data are skipped.
 The sampling window of each profile is read straight from the `gmx wham`
 command line stored in the file header (`-b`/`-e`, in ps):
 
-    * <ff>_<lipid>_part{1..5}_profile.xvg  -b/-e give a 20 ns window
+    * <ff>_<lipid>_part{1..5}_profile.xvg  -b/-e give a 10 ns window (20 ns
+                                           for DMPC)
     * <ff>_<lipid>_20-100_profile.xvg      -b 20000 (no -e)  -> 80 ns
-    * <ff>_<lipid>_profile.xvg             no -b/-e          -> full 100 ns
+    * <ff>_<lipid>_profile.xvg             no -b/-e          -> the full run
+                                           (50 ns; 100 ns for DMPC)
 
-Colours follow the other plotting scripts: CHARMM black, AMBER red,
-SLipids green.
+Colours follow the other plotting scripts (``palette``): CHARMM blue, AMBER
+gold, SLipids green.
 """
 
 import re
@@ -101,13 +103,18 @@ def scatter_plot(points, xlabel, title, outfile):
 
 def plot_lipid(lipid):
     """Build the range-vs-time and range-vs-starttime scatters for one lipid."""
-    files = sorted(DATA.glob(f"*_{lipid}_*profile.xvg"))
+    # Only {ff}_{lipid}_[part{n}_|20-100_]profile.xvg: a bare *_{lipid}_* glob
+    # would also take the other ion condition's {ff}_DMPG_JC_profile.xvg.
+    pat = re.compile(rf"[a-z]+_{lipid}_(part\d+_|20-100_)?profile\.xvg")
+    files = sorted(f for f in DATA.glob(f"*_{lipid}_*profile.xvg")
+                   if pat.fullmatch(f.name))
     if not files:
         print(f"skipped {lipid}: no profile data")
         return
 
     # Full-trajectory profiles carry no -e; use the largest -e found anywhere
-    # (the parts run to 100000 ps) as the full-trajectory end time.
+    # (the last part's -e: 50000 ps, or 100000 ps for DMPC) as the
+    # full-trajectory end time.
     ends = [int(m) for f in files
             for m in re.findall(r"-e\s+(\d+)", f.read_text()[:4000])]
     default_end_ps = max(ends) if ends else 100000

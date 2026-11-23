@@ -3,8 +3,8 @@
 
 2 x 3 grid: the two pairs (DCLE-DCLE, C6-DCLE) down the rows, the ensembles
 across the columns, force fields overlaid in the ``palette`` colours.  Each
-run's stability time (``stability.json``) is a dashed vertical line in its
-force-field colour, so a peak that moves when the bilayer breaks up would show
+broken run's stability time (``stability.json``) is a dashed vertical line in
+its force-field colour, so a peak that moves when the bilayer breaks up would show
 as a step at that line.  The grey band in each panel is the spread
 (min-max) of the posres runs' windows for that pair -- the window-to-window
 noise of a run known to stay a bilayer, i.e. the yardstick for "moved".

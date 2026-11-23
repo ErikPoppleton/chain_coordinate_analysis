@@ -2,8 +2,9 @@
 r"""Painter for the SI box-z figure: :math:`\Delta Z(t)` of the AMBER DMPG
 equilibrium runs and of the two double-box control simulations.
 
-The AMBER DMPG bilayer keeps thickening for hundreds of ns (see the d_HC
-trajectory in Figure 1), and the box follows it along z.  The two controls test
+On the old Na+/Mg2+/Ca2+ ion mix the AMBER DMPG bilayer kept thickening for
+hundreds of ns (the d_HC climb in the JC column of the SI ion figure), and the
+box follows it along z.  This figure deliberately stays on that old-ion data.  The two controls test
 whether that is a finite-size/periodic artifact: one with the box doubled along
 z, one doubled with fewer counterions.
 

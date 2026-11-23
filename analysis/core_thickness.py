@@ -6,9 +6,11 @@ by **two metrics**, for comparison to the head-to-head thickness d_HH:
      of each chain (``C22``/``C32`` for CHARMM/SLipids, ``C12`` of each ``OL``/
      ``MY`` tail residue for AMBER): the leaflet-to-leaflet distance of the
      polar/apolar boundary plane.  Computed over the **full trajectory** (the
-     250 ns runs already have equilibration dropped).
-  2. **tail mass-density width @ 500 kg/m^3** -- the reference method (over the
-     **last 50 ns**, matching the published method): the mass density profile of
+     500 ns, 2501-frame downloaded runs; equilibration is trimmed downstream by
+     the pymbar t0 from ``stats.py``).
+  2. **tail mass-density width @ 500 kg/m^3** -- the reference method, also
+     over the **full trajectory** (as the cluster ``gmx density`` run on
+     ``full.xtc`` is): the mass density profile of
      the hydrophobic tail atoms (the ``tails`` set of ``make_tail_index.py``) is
      a slab centred on the bilayer mid-plane, and d_HC is its full width where it
      crosses 500 kg/m^3.  Computed here directly in MDAnalysis (mass-weighted
@@ -27,10 +29,11 @@ Writes ``data/core_thickness.npz``:
   * ``{ff}_{lipid}_lipy_rep{r}``  -- per-frame lipyphilic d_HC (nm), full traj
   * ``{ff}_{lipid}_dhh_rep{r}``   -- per-frame lipyphilic d_HH (nm), full traj,
                                     frame-aligned with ``_lipy_rep{r}``
-  * ``{ff}_{lipid}_denswidth``    -- per-replicate density width @ 500 (nm), 1-D
-  * ``{ff}_{lipid}_densprof_z`` / ``_densprof`` -- replicate-mean density profile
-                                    (relative z in nm, density in kg/m^3), for the
-                                    supplementary profile figure.
+  * ``{ff}_{lipid}_denswidth_rep{r}`` -- density width @ 500 (nm), one scalar
+  * ``{ff}_{lipid}_densprof_rep{r}``  -- that replicate's density profile (kg/m^3)
+  * ``{ff}_{lipid}_densprof_z``       -- the profiles' relative z (nm), shared
+Everything is keyed per replicate, so a ``--reps`` subset run replaces only the
+replicates it ran when it is merged into an existing file.
 
     conda run -n lipid64 python analysis/core_thickness.py
 """
@@ -52,7 +55,6 @@ ROOT = Path(__file__).resolve().parent.parent
 TRAJ = ROOT / "traj"
 DATA = ROOT / "data"
 
-LAST_NS = 50.0                 # analyse only the final 50 ns
 DENS_THRESHOLD = 500.0         # kg/m^3, hydrophobic-core density cutoff
 BIN_A = 0.5                    # density z-bin width (A) ~ gmx -sl 200 over a ~10 nm box
 AMU_A3_TO_KGM3 = 1660.539      # 1 amu/A^3 -> kg/m^3
@@ -65,11 +67,6 @@ def tail_carbon_sel(scheme, lipid):
     if scheme == "amber":
         return f"resname {AMBER_TAIL[lipid]} and name C12"
     return f"resname {lipid} and name C22 C32"
-
-
-def start_frame(u):
-    n = u.trajectory.n_frames
-    return max(0, n - int(round(LAST_NS * 1000.0 / u.trajectory.dt)))
 
 
 def _membthickness(u, sel, start):
@@ -95,7 +92,7 @@ def dhh_thickness(u, start):
     return _membthickness(u, PHOSPHATE_SEL, start)
 
 
-def tail_density(u, scheme, lipid, start):
+def tail_density(u, scheme, lipid, start=0):
     """(width_nm, density_kg_m3) -- tail mass-density profile (relative z centred
     on the tail COM each frame) and its full width at DENS_THRESHOLD."""
     tail = tail_atoms(u, scheme, lipid)
@@ -139,7 +136,7 @@ def main():
             gro = TRAJ / f"{ff}_{lipid}.gro"
             if not gro.exists():
                 continue
-            widths, profs, lipy_means = [], [], []
+            widths, lipy_means = [], []
             for r in args.reps:
                 xtc = TRAJ / f"{ff}_{lipid}{r}.xtc"
                 if not xtc.exists():
@@ -147,29 +144,28 @@ def main():
                     continue
                 u = mda.Universe(str(gro), str(xtc))
                 _, scheme, lip = detect(u.atoms.resnames)
-                start = start_frame(u)          # last-50 ns window (density metric)
-
-                # lipyphilic d_HC and d_HH over the FULL trajectory (the 250 ns
-                # runs already have equilibration dropped), frame-aligned so
+                # lipyphilic d_HC and d_HH over the FULL trajectory (500 ns;
+                # burn-in is trimmed downstream via stats.py's t0), frame-aligned so
                 # H(t) = d_HH(t) - d_HC(t) is a genuine per-frame quantity.
                 t = lipy_thickness(u, scheme, lip, 0)
                 out[f"{ff}_{lipid}_lipy_rep{r}"] = t
                 lipy_means.append(float(np.nanmean(t)))
                 out[f"{ff}_{lipid}_dhh_rep{r}"] = dhh_thickness(u, 0)
 
-                # density metric keeps the published last-50 ns window.
-                w, dens = tail_density(u, scheme, lip, start)
+                # density metric over the same full trajectory, like the
+                # cluster gmx density run on full.xtc.
+                w, dens = tail_density(u, scheme, lip)
                 widths.append(w)
-                profs.append(dens)
+                out[f"{ff}_{lipid}_denswidth_rep{r}"] = np.float64(w)
+                out[f"{ff}_{lipid}_densprof_rep{r}"] = dens
             if not widths:
                 continue
-            out[f"{ff}_{lipid}_denswidth"] = np.array(widths)
             out[f"{ff}_{lipid}_densprof_z"] = DENS_Z_NM
-            out[f"{ff}_{lipid}_densprof"] = np.mean(profs, axis=0)
+            sd = (lambda v: np.std(v, ddof=1) if len(v) > 1 else 0.0)
             print(f"{ff}_{lipid}: d_HC lipyphilic = "
-                  f"{np.mean(lipy_means):.3f}±{np.std(lipy_means):.3f} nm | "
-                  f"density@500 = {np.mean(widths):.3f}±{np.std(widths):.3f} nm "
-                  f"({len(widths)} reps, last {LAST_NS:.0f} ns)")
+                  f"{np.mean(lipy_means):.3f}±{sd(lipy_means):.3f} nm | "
+                  f"density@500 = {np.mean(widths):.3f}±{sd(widths):.3f} nm "
+                  f"({len(widths)} reps, full trajectory)")
     if not out:
         raise SystemExit("no trajectories found under traj/")
     # Merge into any existing file (as box_z.py does): a subset run
@@ -178,6 +174,12 @@ def main():
     if path.exists():
         with np.load(path) as old_npz:
             merged = {k: old_npz[k] for k in old_npz.files}
+        # Drop the old per-system density keys (all replicates in one array)
+        # for any system this run has rewritten per replicate.
+        for key in [k for k in merged
+                    if k.endswith(("_denswidth", "_densprof"))]:
+            if key.rsplit("_", 1)[0] + "_densprof_z" in out:
+                del merged[key]
         merged.update(out)
         out = merged
     np.savez(path, **out)

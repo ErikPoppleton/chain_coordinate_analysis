@@ -3,11 +3,11 @@
 lipid, with the head-to-head thickness d_HH for reference, and draw the tail
 mass-density profiles that define the density metric.
 
-Metrics (both over the last 50 ns; from ``core_thickness.py`` ->
-``data/core_thickness.npz``):
-  * **lipyphilic** -- ``MembThickness`` on the first aliphatic tail carbon;
-  * **density @ 500 kg/m^3** -- full width of the tail mass-density profile at
-    500 kg/m^3.  Preferred source is the cluster ``gmx density`` output
+Metrics (from ``core_thickness.py`` -> ``data/core_thickness.npz``):
+  * **lipyphilic** -- ``MembThickness`` on the first aliphatic tail carbon, over
+    the full trajectory;
+  * **density @ 500 kg/m^3** -- also over the full trajectory, the full width
+    of the tail mass-density profile at 500 kg/m^3.  Preferred source is the cluster ``gmx density`` output
     ``data/{ff}_{lipid}_{rep}_taildens.xvg`` (the ``tails`` column); the local
     MDAnalysis density in the npz is the fallback and cross-check.
 
@@ -75,7 +75,8 @@ def width_at(z, d, thr=DENS_THRESHOLD):
 
 def summary(vals):
     v = [x for x in vals if x is not None and np.isfinite(x)]
-    return (float(np.mean(v)), float(np.std(v))) if v else None
+    return ((float(np.mean(v)), float(np.std(v, ddof=1)) if len(v) > 1 else 0.0)
+            if v else None)
 
 
 def collect():
@@ -92,12 +93,14 @@ def collect():
                 cell["lipy"] = summary(
                     [float(ct[k].mean()) for r in REPS
                      if (k := f"{ff}_{lipid}_lipy_rep{r}") in ct.files])
-                dw = f"{ff}_{lipid}_denswidth"
-                if dw in ct.files:
-                    cell["dens_mda"] = summary(list(ct[dw]))
-                pz, pf = f"{ff}_{lipid}_densprof_z", f"{ff}_{lipid}_densprof"
-                if pz in ct.files:
-                    profiles[(ff, lipid)] = (ct[pz], ct[pf])
+                cell["dens_mda"] = summary(
+                    [float(ct[k]) for r in REPS
+                     if (k := f"{ff}_{lipid}_denswidth_rep{r}") in ct.files])
+                pz = f"{ff}_{lipid}_densprof_z"
+                prof = [ct[k] for r in REPS
+                        if (k := f"{ff}_{lipid}_densprof_rep{r}") in ct.files]
+                if pz in ct.files and prof:
+                    profiles[(ff, lipid)] = (ct[pz], np.mean(prof, axis=0))
             gmx = []
             for r in REPS:
                 x = DATA / f"{ff}_{lipid}_{r}_taildens.xvg"

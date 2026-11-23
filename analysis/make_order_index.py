@@ -79,9 +79,9 @@ from pathlib import Path
 import numpy as np
 
 # Chain lengths (TAIL_NC), double-bond positions and the force-field residue
-# vocabulary come from lipiddefs; re-exported because lipid_properties.py reads
-# TAIL_NC off this module.
-from lipiddefs import (CHARMM_IONS, WATER, FORCEFIELDS, TAIL_NC, DOUBLE_BOND, AMBER_HEAD,
+# vocabulary come from lipiddefs (TAIL_NC stays importable from here as a thin
+# re-export).
+from lipiddefs import (label_from_path, CHARMM_IONS, WATER, FORCEFIELDS, TAIL_NC, DOUBLE_BOND, AMBER_HEAD,
                        AMBER_TAIL, PHOSPHATE_NAMES, n_unsat)
 
 # Index files all live in the repo's data/ directory (matching make_density_index
@@ -133,9 +133,11 @@ def detect(atoms):
     SLipids share the single-residue naming scheme, so only 'amber' vs 'single'
     matters for building the index; the lipid identity sets tail length /
     unsaturation.  ``ff`` is only resolvable when the structure still has its
-    water (TIP3 -> CHARMM, SOL -> SLipids, TP3/OL/MY -> AMBER), as the
-    full-system ``traj/{ff}_{lipid}.gro`` does; it is ``None`` for a
-    waters-stripped lipid-only structure, where CHARMM and SLipids look alike."""
+    water/ions (OL/MY/PC/PGR -> AMBER, then TIP3 -> CHARMM, SOL -> SLipids,
+    CHARMM-only ion names -> CHARMM, any other water (e.g. the rebuilt SLipids
+    DMPG's TP3) -> SLipids), as the full-system ``traj/{ff}_{lipid}.gro`` does.
+    AMBER is still recognised from its lipid residues alone; ``ff`` is ``None`` for a
+    waters-stripped lipid-only CHARMM/SLipids structure, where the two look alike."""
     resn = {a[1] for a in atoms}
     # AMBER is identified by its lipid residue layout, never by the water name:
     # the rebuilt SLipids DMPG carries AMBER-style TP3 water, and the old
@@ -258,13 +260,14 @@ def write_group(fh, name, serials):
 
 def generate(structure, out=None, ff=None, lipid=None):
     """Build the g_lomepro order-parameter index for ``structure``, write it to
-    ``out`` (default ``data/order_{ff}_{lipid}.ndx``), and return a dict describing it:
+    ``out`` (default ``data/order_{ff}_{lipid}.ndx``, ``{lipid}`` being the gro's
+    own label when it is named ``{ff}_{label}.gro``), and return a dict describing it:
     ``ff``, ``lipid``, ``nlip`` (lipid count = g_lomepro's ``-lip_num``), ``unsat``
     (0 or 2, g_lomepro's ``-unsat``), ``per_chain`` (atoms per sn-1/sn-2 chain),
     ``tail_nc`` and ``out``.  ``ff``/``lipid`` override autodetection.
 
-    Importable so the pipeline (``lipid_properties.py --lomepro``) can produce the
-    shared ``data/lomepro_{ff}_{lipid}.ndx`` for a system without shelling out."""
+    Importable, though the pipeline no longer calls it: ``lipid_properties.py``
+    reads the pre-built index copied cluster-side as ``{ff}_{lipid}/lomepro.ndx``."""
     atoms = read_gro(structure)
     scheme, det_lipid, det_ff = detect(atoms)
     lipid = lipid or det_lipid
@@ -297,7 +300,9 @@ def generate(structure, out=None, ff=None, lipid=None):
     if out:
         out = Path(out)
     else:
-        out = DATA / f"order_{ff_label.replace('/', '_')}_{lipid}.ndx"
+        hit = label_from_path(structure, lipid, ff)
+        out = DATA / (f"order_{hit[0]}_{hit[1]}.ndx" if hit else
+                      f"order_{ff_label.replace('/', '_')}_{lipid}.ndx")
     out.parent.mkdir(parents=True, exist_ok=True)
     unsat = n_unsat(lipid)
     with open(out, "w") as fh:

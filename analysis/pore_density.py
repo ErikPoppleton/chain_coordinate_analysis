@@ -33,9 +33,17 @@ C2 carbons -- so pore occupancy can be plotted as a trajectory over time
 (``plot_pore_counts.py``).  Two z-slabs are counted per selection: the **full**
 cylinder (|z| <= 1.35 nm) and its **middle third** (|z| <= 0.45 nm, the central
 9 A -- the pore's narrowest waist).  Keys: ``frame``, ``time_ps``, ``cyl_r_nm``,
-``cyl_h_nm``, ``cyl_mid_h_nm``, one 1-D count array per selection (``water``,
-``phosphorus``, ``glycerol_C2``) for the full cylinder, and a ``{name}_mid``
-array for the middle third.
+``cyl_h_nm``, ``cyl_mid_h_nm``, ``xi`` (the per-frame chain coordinate, the
+``xiChain =`` value the rerun log prints for each frame), one 1-D count array
+per selection (``water``, ``phosphorus``, ``glycerol_C2``) for the full
+cylinder, and a ``{name}_mid`` array for the middle third.
+
+**Every umbrella window** (``--windows all``, or a list such as ``0 5 23``):
+discovery then visits ``{ff}_{lipid}/umbrella{w}/`` for each window and writes
+``data/poredens_windows/poredens{,_counts}_{ff}_{lipid}_w{w:02d}.npz`` instead
+(the umbrella23 files above are left alone).  Each window needs its own
+``rerunerr.log`` -- ``setup_files/submit_pore_windows.sh`` makes them and then
+runs this script.  ``--nprocs N`` farms the runs over a process pool.
 
 Run in the MDAnalysis env.  With no arguments it discovers all nine systems the
 same way ``lipid_properties.py`` does -- iterating force field x lipid under
@@ -47,13 +55,14 @@ must hold that triple), e.g. for a local test against ``tmp/``::
     conda run -n lipid64 python analysis/pore_density.py                 # all 9
     conda run -n lipid64 python analysis/pore_density.py --lipids DMPC    # subset
     conda run -n lipid64 python analysis/pore_density.py tmp/             # one dir
+    conda run -n lipid64 python analysis/pore_density.py --windows all --nprocs 24
 
 then plot with ``plot_pore_density.py``.
 """
 
 import argparse
 import re
-import sys
+from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
@@ -83,14 +92,34 @@ _CENTER_RE = re.compile(
     r"Cylinder center at \(X/Y/Z\):\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)")
 
 
-def parse_centers(log):
-    """Return an (n_frame, 3) array of pore centres (nm) in file order."""
-    centers = [tuple(float(x) for x in m.groups())
-               for m in (_CENTER_RE.search(l) for l in log.read_text().splitlines())
-               if m]
+_XI_RE = re.compile(r"xiChain =\s*([-+\d.eE]+)")
+N_WINDOWS = 24                   # umbrella0 .. umbrella23
+WINDOW_DIR = "poredens_windows"  # data/ subdirectory for the per-window output
+
+
+def parse_log(log):
+    """``(centres, xi)`` from a chain-coordinate rerun log, in file order.
+
+    ``centres`` is an (n_frame, 3) array of pore centres (nm); ``xi`` the
+    per-frame chain coordinate (``xiChain =``), or None if its count does not
+    match the centres (an older log format).
+    """
+    centers, xi = [], []
+    for line in log.read_text().splitlines():
+        m = _CENTER_RE.search(line)
+        if m:
+            centers.append(tuple(float(x) for x in m.groups()))
+            continue
+        m = _XI_RE.search(line)
+        if m:
+            xi.append(float(m.group(1)))
     if not centers:
-        sys.exit(f"no 'Cylinder center at' lines found in {log}")
-    return np.array(centers)
+        raise RuntimeError(f"no 'Cylinder center at' lines found in {log}")
+    if len(xi) != len(centers):
+        print(f"  WARNING {log}: {len(xi)} xiChain values vs {len(centers)} "
+              f"centres; not storing xi")
+        xi = None
+    return np.array(centers), (np.array(xi) if xi is not None else None)
 
 
 def water_oxygen(group):
@@ -98,14 +127,15 @@ def water_oxygen(group):
     return group[np.isin(group.names, list(WATER_OXYGEN))]
 
 
-def process(run_dir, out_dir):
+def process(run_dir, out_dir, suffix=""):
+    """Map + count one run dir; ``suffix`` is appended to the output stems."""
     gro, xtc, log = run_dir / "md.gro", run_dir / "md.xtc", run_dir / "rerunerr.log"
     for f in (gro, xtc, log):
         if not f.exists():
             print(f"skip {run_dir}: missing {f.name}")
             return
 
-    centers = parse_centers(log)
+    centers, xi = parse_log(log)
     u = mda.Universe(str(gro), str(xtc))
     ff, scheme, lipid = mdi.detect(u.atoms.resnames)
     nframes = len(u.trajectory)
@@ -166,7 +196,7 @@ def process(run_dir, out_dir):
     for name, h in hists.items():
         out[name] = h / (shell_vol * n)
 
-    dest = out_dir / f"poredens_{ff}_{lipid}.npz"
+    dest = out_dir / f"poredens_{ff}_{lipid}{suffix}.npz"
     np.savez_compressed(dest, **out)
     print(f"wrote {dest}  ({ff} {lipid}; {n} frames)  "
           f"selections: {', '.join(hists)}")
@@ -174,15 +204,25 @@ def process(run_dir, out_dir):
     # Per-frame in-cylinder occupancy -> its own npz (frame + time axes; one
     # raw-count array per selection for the full cylinder plus a ``{name}_mid``
     # array for the middle-third slab; CV geometry stored for reference).
-    cdest = out_dir / f"poredens_counts_{ff}_{lipid}.npz"
+    cdest = out_dir / f"poredens_counts_{ff}_{lipid}{suffix}.npz"
     cout = {"frame": np.arange(n), "time_ps": times,
             "cyl_r_nm": np.array(CYL_R), "cyl_h_nm": np.array(CYL_H),
             "cyl_mid_h_nm": np.array(CYL_H / 3.0)}
+    if xi is not None:
+        cout["xi"] = xi[:n]
     cout.update(counts)
     cout.update({f"{name}_mid": c for name, c in counts_mid.items()})
     np.savez_compressed(cdest, **cout)
     print(f"wrote {cdest}  (per-frame counts, full + middle-third: "
           f"{', '.join(count_names)})")
+
+
+def _process_safe(run_dir, out_dir, suffix=""):
+    """``process`` for the pool: one bad run is reported, not fatal to the rest."""
+    try:
+        process(run_dir, out_dir, suffix)
+    except Exception as exc:                     # noqa: BLE001
+        print(f"FAILED {run_dir}: {type(exc).__name__}: {exc}")
 
 
 def main():
@@ -196,17 +236,36 @@ def main():
     ap.add_argument("--lipids", nargs="+", default=LIPIDS)
     ap.add_argument("--run-subdir", default="umbrella23",
                     help="pore run subdir inside each {ff}_{lipid} (default: umbrella23)")
+    ap.add_argument("--windows", nargs="+", default=None,
+                    help="process umbrella windows instead of --run-subdir: 'all' "
+                         f"(0..{N_WINDOWS - 1}) or a list of indices; output goes "
+                         f"to data/{WINDOW_DIR}/ with a _wNN suffix")
+    ap.add_argument("--nprocs", type=int, default=1,
+                    help="parallel worker processes (one run each)")
     args = ap.parse_args()
 
-    if args.runs:
-        runs = args.runs
+    if args.windows:
+        windows = (range(N_WINDOWS) if args.windows == ["all"]
+                   else [int(w) for w in args.windows])
+        out_dir = DATA / WINDOW_DIR
+        jobs = [(args.sims_root / f"{ff}_{lipid}" / f"umbrella{w}", out_dir,
+                 f"_w{w:02d}")
+                for ff in args.forcefields for lipid in args.lipids
+                for w in windows]
     else:
-        runs = [args.sims_root / f"{ff}_{lipid}" / args.run_subdir
-                for ff in args.forcefields for lipid in args.lipids]
+        out_dir = DATA
+        runs = args.runs or [args.sims_root / f"{ff}_{lipid}" / args.run_subdir
+                             for ff in args.forcefields for lipid in args.lipids]
+        jobs = [(run, out_dir, "") for run in runs]
 
-    DATA.mkdir(parents=True, exist_ok=True)
-    for run in runs:
-        process(run, DATA)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    nprocs = max(1, min(args.nprocs, len(jobs)))
+    if nprocs == 1:
+        for job in jobs:
+            _process_safe(*job)
+    else:
+        with Pool(nprocs) as pool:
+            pool.starmap(_process_safe, jobs, chunksize=1)
 
 
 if __name__ == "__main__":

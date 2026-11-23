@@ -41,14 +41,18 @@ export SLICE_COORD_CYL_R=0.9
 export SLICE_COORD_FREEZE_CYLINDER_XIREF=0.8
 export SLICE_COORD_FREEZE_CYLINDER_X=$X
 export SLICE_COORD_FREEZE_CYLINDER_Y=$Y
+# Print the CV table (centre, xiChain) for EVERY frame.  In a rerun each frame
+# is one "step", and the fork's default is every 1000 steps -- i.e. only frame 0.
+export SLICE_COORD_NST_OUTPUT=1
 export OMP_NUM_THREADS=1
 
 # 1. one single-threaded rerun per window, NPROC at a time.  The CV prints its
 #    per-frame table (centre, xiChain) to stderr -> rerunerr.log.
 for w in $(seq 0 23); do
     d=umbrella$w
-    if [ -s $d/rerunerr.log ] && grep -q "Cylinder center" $d/rerunerr.log; then
-        echo "$d: rerunerr.log present, skipping rerun"; continue
+    # Reuse a log only if it was written with per-frame output.
+    if [ -s $d/rerunerr.log ] && grep -Eq "output steps += 1$" $d/rerunerr.log; then
+        echo "$d: per-frame rerunerr.log present, skipping rerun"; continue
     fi
     for f in md.xtc md.tpr md.gro; do
         [ -e $d/$f ] || echo "WARNING $d: missing $f"

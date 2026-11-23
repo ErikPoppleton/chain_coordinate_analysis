@@ -139,6 +139,11 @@ def process(run_dir, out_dir, suffix=""):
     u = mda.Universe(str(gro), str(xtc))
     ff, scheme, lipid = mdi.detect(u.atoms.resnames)
     nframes = len(u.trajectory)
+    if len(centers) < nframes:
+        # A log written with the fork's default SLICE_COORD_NST_OUTPUT (1000)
+        # has a centre for frame 0 only; zipping would silently keep 1 frame.
+        raise RuntimeError(f"{log}: {len(centers)} centres for {nframes} frames "
+                           f"-- rerun with SLICE_COORD_NST_OUTPUT=1")
     if len(centers) != nframes:
         print(f"  WARNING {ff} {lipid}: {len(centers)} centres vs {nframes} "
               f"frames; using min and zipping in order")

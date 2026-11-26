@@ -224,39 +224,57 @@ def draw_box(ax, prop, show_ns=True, star_pt=6.0, verbose=False):
     return data
 
 
-def draw_diffusion(ax, verbose=False):
+def draw_diffusion(ax, verbose=False, source="inf"):
     """Grouped bars of the lateral diffusion coefficient (um^2/s).
 
-    Error bars are the **SD across the three replicates**: D is one fitted
-    scalar per run, so there is no within-run series to autocorrelation-correct
-    (the same convention the summary table uses).
+    ``source="inf"`` (Figure 1a): the finite-size-corrected D_inf from
+    ``data/diffusion_psd.json`` (``analysis/diffusion_psd.py``, periodic
+    Saffman-Delbrueck + Venable 2017 Bayesian single-box extrapolation), bar =
+    posterior median, error bar = its 95 % interval (asymmetric).
+
+    ``source="raw"``: the simulated D from ``data/diffusion.json``
+    (``analysis/diffusion.py``, bilayer-COM, fit 10 ns-(T-10)/2), error bar =
+    SD across the three replicates (one fitted scalar per run).
     """
-    npz_path = DATA / "lipprops_lateral_diffusion.npz"
-    if not npz_path.exists():
-        raise SystemExit(f"{npz_path} missing")
-    npz = np.load(npz_path)
+    import json
+    if source == "inf":
+        path = DATA / "diffusion_psd.json"
+    elif source == "raw":
+        path = DATA / "diffusion.json"
+    else:
+        raise ValueError(source)
+    if not path.exists():
+        raise SystemExit(f"{path} missing")
+    res = json.loads(path.read_text())
     for fi, (ff, ff_label, colour) in enumerate(FORCEFIELDS):
-        xs, ys, es = [], [], []
+        xs, ys, lo, hi = [], [], [], []
         for li, lipid in enumerate(LIPIDS):
-            key = f"{ff}_{lipid}_D"
-            if key not in npz:
+            r = res.get(f"{ff}_{lipid}")
+            if r is None:
                 continue
-            d = np.asarray(npz[key], dtype=float) * D_SCALE
+            if source == "inf":
+                d = r["D_inf"]
+                y, el, eh = d["median"], d["median"] - d["lo95"], d["hi95"] - d["median"]
+            else:
+                d = r["D_bilayer"]
+                y, el, eh = d["mean"], d["sd"], d["sd"]
             xs.append(li + OFFSETS[fi])
-            ys.append(d.mean())
-            es.append(d.std(ddof=1) if d.size > 1 else 0.0)
+            ys.append(y)
+            lo.append(el)
+            hi.append(eh)
             if verbose:
-                print(f"  {lipid:5s} {ff:8s} D = {d.mean():.3f} "
-                      f"+- {es[-1]:.3f} um^2/s  (n={d.size})")
+                print(f"  {lipid:5s} {ff:8s} D_{source} = {y:.2f} "
+                      f"(-{el:.2f} +{eh:.2f}) um^2/s")
         if not xs:
             continue
         ax.bar(xs, ys, BOX_W, color=colour, edgecolor="black", linewidth=0.7,
                label=ff_label)
-        ax.errorbar(xs, ys, yerr=es, fmt="none", ecolor="black",
+        ax.errorbar(xs, ys, yerr=[lo, hi], fmt="none", ecolor="black",
                     elinewidth=0.7, capsize=1.5)
     ax.set_xticks(range(len(LIPIDS)), LIPIDS)
     ax.set_xlim(-0.5, len(LIPIDS) - 0.5)
-    ax.set_ylabel(r"$D$ ($\mathrm{\mu m^2\,s^{-1}}$)")
+    ax.set_ylabel(r"$D_\infty$ ($\mathrm{\mu m^2\,s^{-1}}$)" if source == "inf"
+                  else r"$D$ ($\mathrm{\mu m^2\,s^{-1}}$)")
     ax.set_ylim(bottom=0)
     figstyle.categorical_x(ax)
 

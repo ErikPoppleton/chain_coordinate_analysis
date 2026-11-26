@@ -26,7 +26,7 @@ can import it.
 # --- the systems -----------------------------------------------------------
 
 FORCEFIELDS = ["charmm", "amber", "slipids"]
-FF_LABELS = {"charmm": "CHARMM", "amber": "AMBER", "slipids": "SLipids"}
+FF_LABELS = {"charmm": "CHARMM", "amber": "Lipid21", "slipids": "SLipids"}
 FF_LABELLED = [(ff, FF_LABELS[ff]) for ff in FORCEFIELDS]
 
 # Pressure-coupling / restraint ensembles -- the HMMM analogue of the parent

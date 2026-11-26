@@ -164,6 +164,19 @@ def _moduli_full(perrep, ff, lipid, val_key, sem_key):
     return autocorr.hierarchical_ci_from_estimates(means, sems, neffs)
 
 
+_PSD = None
+
+
+def _psd():
+    """data/diffusion_psd.json (analysis/diffusion_psd.py), cached; {} if absent."""
+    global _PSD
+    if _PSD is None:
+        import json
+        p = Path(__file__).resolve().parent.parent / "data" / "diffusion_psd.json"
+        _PSD = json.loads(p.read_text()) if p.exists() else {}
+    return _PSD
+
+
 def pore_barrier(ff, lipid):
     """(Delta G, SD over the five partial profiles) in kJ/mol, or None.
 
@@ -266,6 +279,13 @@ def collect():
             dkey = "%s_%s_D" % (ff, lipid)
             cell["diff"] = (summarise_reps([v * 1e8 for v in npz["lateral_diffusion"][dkey]])
                             if dkey in npz["lateral_diffusion"].files else None)  # cm^2/s -> um^2/s
+            # finite-size-corrected D_inf (analysis/diffusion_psd.py): the
+            # tabulated diffusion column, (median, +err, -err) of the 95 % interval
+            psd = _psd().get("%s_%s" % (ff, lipid))
+            cell["dinf"] = ((psd["D_inf"]["median"],
+                             psd["D_inf"]["hi95"] - psd["D_inf"]["median"],
+                             psd["D_inf"]["median"] - psd["D_inf"]["lo95"])
+                            if psd else None)
             # --- g_lomepro ---
             # --- tilt moduli: hierarchical CI from per-rep value + block SEM ---
             cell["chi"] = moduli_ci(tiltrep, ff, lipid, "chi_kT", "chi_block_sem")
@@ -284,7 +304,9 @@ COLS = [
     ("apl",   "APL",             r"\AA$^2$",                          1),
     ("thick", r"$d_{\mathrm{HH}}$", "nm",                            2),
     ("dhc",   r"$d_{\mathrm{HC}}$", "nm",                            2),
-    ("diff",  r"$D$",            r"µm$^2$\,s$^{-1}$",                 1),
+    # D_inf, not the raw D: Figure 1a's value (the raw per-run D is still in
+    # cell["diff"], which collect() returns for the vs-barrier plots)
+    ("dinf",  r"$D_\infty$",      r"µm$^2$\,s$^{-1}$",                 0),
     # The ost_pymodules per-lipid chi is still computed (collect() returns it,
     # and the vs-barrier figures plot it) but is no longer tabulated: the two
     # tilt moduli measure the same thing, so the table carries only the
@@ -293,7 +315,8 @@ COLS = [
     ("dg",    r"$\Delta G_{\mathrm{pore}}$", r"kJ\,mol$^{-1}$",           1),
 ]
 GROUPS = [
-    (r"lipyphilic\cite{smith2021lipyphilic}", 4),
+    (r"lipyphilic\cite{smith2021lipyphilic}", 3),
+    (r"PSD\cite{venable2017lipid}", 1),
     (r"Lipidator\cite{allolio2018local}", 1),
     (r"gmx wham\cite{hub2010gwham}", 1),
 ]
@@ -318,21 +341,24 @@ EXPERIMENTAL = {
         "apl":   r"$72.5$\cite{nagle2000structure}",
         "thick": r"$3.69$\cite{nagle2000structure}",
         "dhc":   r"$2.71$\cite{nagle2000structure}",
-        "diff":  r"$\approx12$ ($308$\,K)\cite{filippov2003effect}",
+        "dinf":  r"$\approx12$ ($308$\,K)\cite{filippov2003effect}",
         "kappa": _nagle_kappa(89, 4),          # 89 +/- 4 mN/m
+        "dg":    r"$32.7$\cite{evans2003dynamic}",
     },
     "DMPC": {
         "apl":   r"$59.6$\cite{nagle2000structure}",
         "thick": r"$3.60$\cite{nagle2000structure,schuy2006thermal}",
         "dhc":   r"$2.62$\cite{nagle2000structure}",
-        "diff":  r"$\approx11$ ($308$\,K)\cite{filippov2003effect}",
+        "dinf":  r"$\approx11$ ($308$\,K)\cite{filippov2003effect}",
         "kappa": _nagle_kappa(44, 2),          # 44 +/- 2 mN/m
+        # dynamic tension spectroscopy on DTPC (13:0/13:0), not DMPC
+        "dg":    r"$22.3$ (DTPC)\cite{evans2003dynamic}",
     },
     "DMPG": {
         "apl":   r"$65.1$\cite{pan2012molecular}",
         "thick": r"$3.25$\cite{pan2012molecular}",
         "dhc":   r"$2.36$\cite{pan2012molecular}",
-        "diff":  r"$11.8$ ($309$ K)\cite{pali1989restricted}",
+        "dinf":  r"$11.8$ ($309$ K)\cite{pali1989restricted}",
     },
 }
 
@@ -340,6 +366,9 @@ EXPERIMENTAL = {
 def fmt(cell, dec):
     if cell is None:
         return "--"
+    if len(cell) == 3:                     # asymmetric interval (D_inf)
+        m, up, dn = cell
+        return "$%.*f^{+%.*f}_{-%.*f}$" % (dec, m, dec, up, dec, dn)
     m, s = cell
     return "$%.*f \\pm %.*f$" % (dec, m, dec, s)
 
@@ -384,33 +413,14 @@ def build_latex(rows):
         lines.append("\\midrule")
     lines.append("\\bottomrule")
     lines.append("\\end{tabular}")
-    lines.append("\\caption{Equilibrium membrane properties by lipid and force field "
-                 "(mean $\\pm$ uncertainty over three replicate simulations). "
-                 "The uncertainty is a hierarchical $95\\%$ confidence interval "
-                 "combining each replicate's within-run error with the between-replicate "
-                 "spread: for the per-frame observables (APL, $d_{\\mathrm{HH}}$, "
-                 "$d_{\\mathrm{HC}}$) the within-run error is the autocorrelation-limited "
-                 "standard error (statistical inefficiency $g$\\cite{chodera2016simple}), "
-                 "and for the tilt modulus $\\kappa_\\theta$ it is a "
-                 "block-averaged SEM; for $D$ (a single fitted scalar per run) it is "
-                 "the SD across the three replicates. "
-                 "$d_{\\mathrm{HH}}$: phosphate--phosphate bilayer thickness; "
-                 "$d_{\\mathrm{HC}}$: hydrophobic-core thickness (first-tail-carbon "
-                 "MembThickness; agrees with the tail mass-density width at "
-                 "$500$\\,kg\\,m$^{-3}$ to $\\sim0.02$\\,nm); "
-                 "$D$: lateral diffusion coefficient; "
-                 "$\\kappa_\\theta$: area-normalised lipid tilt modulus "
-                 "(Lipidator/ReSiS; experimental values converted from mN\\,m$^{-1}$); "
-                 "$\\Delta G_{\\mathrm{pore}}$: pore-formation barrier, from the "
-                 "chain-coordinate PMF basin to the highest point on its pore side "
-                 "(one $50$\\,ns umbrella-sampling PMF per system, $100$\\,ns for DMPC; "
-                 "$\\pm$ is the SD of the same barrier over five consecutive $10$\\,ns "
-                 "sub-windows, $20$\\,ns for DMPC). "
-                 "Simulations: $T=310$\\,K. Except where indicated, experimental values "
-                 "are for $T= 30^{\\circ}$\\,C ($303.15$\\,K)}")
+    # caption as edited by the user (2026-11-25) -- keep verbatim
+    lines.append(CAPTION)
     lines.append("\\label{tab:equilibrium_properties}")
     lines.append("\\end{table}")
     return "\n".join(lines) + "\n"
+
+
+CAPTION = r"""\caption{Equilibrium membrane properties and free energy of pore formation by lipid and force field (mean $\pm$ uncertainty over three replicate simulations). The uncertainty is a $95\%$ confidence interval for the mean over the three replicates that accounts for both within-run sampling noise and the spread between replicates, whichever is larger (see Supplementary Table \ref{tab:equilibration}). The within-run error is the autocorrelation-limited standard error for the per-frame observables (APL, $d_{\mathrm{HH}}$, $d_{\mathrm{HC}}$) and a block-averaged standard error for $\kappa_\theta$. $D_\infty$ is instead the lateral diffusion coefficient extrapolated to an infinite periodic box with the periodic Saffman--Delbr\"uck model (Bayesian single-box extrapolation\cite{venable2017lipid}), given as the posterior median with the $95\%$ credible interval as super- and subscript. $d_{\mathrm{HH}}$: phosphate--phosphate bilayer thickness; $d_{\mathrm{HC}}$: hydrophobic-core thickness (first tail carbon-first tail carbon); $D_\infty$: finite-size-corrected lateral diffusion coefficient; $\kappa_\theta$: area-normalised lipid tilt modulus; $\Delta G_{\mathrm{pore}}$: pore-formation barrier (one $50$ (DOPC, DMPG) or $100$ (DMPC)\,ns umbrella-sampling PMF per system; $\pm$ is the SD of the same barrier over five sub-windows). Simulations: $T=310$\,K. Except where indicated, experimental values are for $T= 30^{\circ}$\,C ($303.15$\,K). The dynamic tension spectroscopy value for DMPC $\Delta G_{pore}$ from Evans 2003\cite{evans2003dynamic} is the value for DTPC (13:0/13:0), rather than DMPC (14:0/14:0), so is lower than the DMPC value.}"""
 
 
 def preview(rows):

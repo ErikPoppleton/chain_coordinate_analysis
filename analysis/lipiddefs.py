@@ -26,7 +26,7 @@ import os
 # Force-field keys, in the canonical order used by every plot/table.  The keys
 # are also the filename prefixes (``{ff}_{lipid}...``).
 FORCEFIELDS = ["charmm", "amber", "slipids"]
-FF_LABELS = {"charmm": "CHARMM", "amber": "AMBER", "slipids": "SLipids"}
+FF_LABELS = {"charmm": "CHARMM", "amber": "Lipid21", "slipids": "SLipids"}
 # [(key, display label), ...] in canonical order -- the table scripts' shape.
 FF_LABELLED = [(ff, FF_LABELS[ff]) for ff in FORCEFIELDS]
 

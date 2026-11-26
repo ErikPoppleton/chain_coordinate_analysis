@@ -27,6 +27,7 @@ Layout is **constrained**, never ``bbox_inches="tight"``: the 180 mm width has
 to survive to disk exactly, and a tight bounding box would shrink-wrap it.
 """
 
+import os
 import subprocess
 import sys
 import warnings
@@ -267,13 +268,53 @@ def mirror_ticks(ax, right_data=False):
 
 # --------------------------------------------------------------------- output
 def find_inkscape():
+    """First Inkscape executable found.  Deliberately *not* probed with
+    ``--version``: since 2026-11-24 the macOS Inkscape 1.4 build finishes its
+    work but never exits (nothing was updated -- cause unknown), so any probe
+    that waits for the process blocks forever.  See :func:`_run_inkscape`."""
+    import shutil
     for cand in INKSCAPE_CANDIDATES:
-        try:
-            subprocess.run([cand, "--version"], capture_output=True, check=True)
-            return cand
-        except (OSError, subprocess.CalledProcessError):
-            continue
+        path = cand if os.path.isabs(cand) else shutil.which(cand)
+        if path and os.access(path, os.X_OK):
+            return path
     return None
+
+
+def _run_inkscape(args, out, timeout=600.0, settle=1.0):
+    """Run Inkscape to write ``out``, tolerating a process that never exits.
+
+    Returns once the process exits (non-zero raises), or once ``out`` exists
+    and its size has been unchanged for ``settle`` seconds -- the export is
+    then complete and the hung process is killed.
+    """
+    import time
+    out = Path(out)
+    if out.exists():
+        out.unlink()
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    t_end, last, since = time.monotonic() + timeout, None, None
+    try:
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                if rc != 0 or not out.exists():
+                    raise RuntimeError(f"inkscape failed (exit {rc}): {args}")
+                return
+            size = out.stat().st_size if out.exists() else None
+            if size:
+                if size != last:
+                    last, since = size, time.monotonic()
+                elif time.monotonic() - since >= settle:
+                    return
+            if time.monotonic() > t_end:
+                raise RuntimeError(f"inkscape timed out after {timeout} s: "
+                                   f"{args}")
+            time.sleep(0.2)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def export_png(svg, png=None, width_px=PNG_W_PX):
@@ -288,9 +329,9 @@ def export_png(svg, png=None, width_px=PNG_W_PX):
     ink = find_inkscape()
     if ink is None:
         return None
-    subprocess.run([ink, str(svg), "--export-type=png",
-                    f"--export-filename={png}", f"--export-width={width_px}"],
-                   check=True, capture_output=True)
+    _run_inkscape([ink, str(svg), "--export-type=png",
+                   f"--export-filename={png}", f"--export-width={width_px}"],
+                  png)
     return png
 
 
@@ -302,9 +343,8 @@ def export_outlines(svg, out=None):
     ink = find_inkscape()
     if ink is None:
         return None
-    subprocess.run([ink, str(svg), "--export-type=svg", "--export-text-to-path",
-                    "--export-plain-svg", f"--export-filename={out}"],
-                   check=True, capture_output=True)
+    _run_inkscape([ink, str(svg), "--export-type=svg", "--export-text-to-path",
+                   "--export-plain-svg", f"--export-filename={out}"], out)
     return out
 
 

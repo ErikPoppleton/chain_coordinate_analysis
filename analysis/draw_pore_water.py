@@ -14,6 +14,10 @@ slices.
                                    over that slice (x) against that slice's
                                    partial-PMF barrier (y); colour = force
                                    field, shape = lipid.
+``draw_subwindow_boxes(ax, lipid, window)``
+                                   per-frame count distribution in one umbrella
+                                   window, sub-window on x, one box per force
+                                   field (the Figure 1b-c box style).
 ``draw_water_vs_xi(ax, lipid)``    water count against xi over all 24 windows,
                                    one curve per (force field, sub-window), the
                                    sub-windows as the force field's light->dark
@@ -46,7 +50,16 @@ COUNT_KEY = "water_mid"          # middle-third slab, as in Figure 4
 SHADES = np.linspace(0.3, 0.9, N_PARTS)
 
 COUNT_LABELS = {"water_mid": "water O in pore waist",
-                "water": "water O in CV cylinder"}
+                "water": "water O in CV cylinder",
+                "phosphorus_mid": "phosphate P in pore waist",
+                "phosphorus": "phosphate P in CV cylinder"}
+
+# Box geometry shared with Figure 1b-c (draw_equilibrium).
+WHIS = (5, 95)                   # whisker percentiles
+BOX_W = 0.22
+OFFSETS = np.array([-0.26, 0.0, 0.26])
+XI08_WINDOW = 15                 # restraint centre xi = 0.80 (select_umbrella_frames)
+XI1_WINDOW = 23                  # xi = 1
 
 
 def subwindows(ff, lipid, data=None):
@@ -190,3 +203,92 @@ def subwindow_handles(ms=2.0):
     return [Line2D([0], [0], color=grey(0.25 + 0.7 * s), marker="o", ms=ms,
                    mew=0, label=f"sub-window {k + 1}")
             for k, s in enumerate(SHADES)]
+
+
+def draw_subwindow_boxes(ax, lipid, window, key=COUNT_KEY, windows_dir=None,
+                         verbose=False):
+    """Per-frame ``key`` counts in umbrella ``window``, one group per sub-window.
+
+    x is the sub-window number (1-5; its time span differs for DMPC, see
+    :func:`subwindows`), with a box per force field in the palette colours:
+    quartile box, whiskers at the 5th/95th percentiles, no fliers -- the box
+    style of Figure 1b-c.  No significance brackets: consecutive frames are
+    correlated, and this is a picture of the distribution, not a test.
+    """
+    drawn = False
+    for fi, (ff, _, colour) in enumerate(FORCEFIELDS):
+        p = (windows_dir or WINDOWS) / f"poredens_counts_{ff}_{lipid}_w{window:02d}.npz"
+        if not p.exists():
+            print(f"  ! {ff} {lipid}: no umbrella{window} counts")
+            continue
+        npz = np.load(p)
+        t = npz["time_ps"]
+        for k, sw in enumerate(subwindows(ff, lipid)):
+            if sw is None:
+                continue
+            m = (t >= sw[0]) & (t <= sw[1])
+            vals = npz[key][m]
+            if vals.size == 0:
+                continue
+            bp = ax.boxplot([vals], positions=[k + 1 + OFFSETS[fi]],
+                            widths=BOX_W, whis=WHIS, showfliers=False,
+                            patch_artist=True, manage_ticks=False)
+            for patch in bp["boxes"]:
+                patch.set(facecolor=colour, edgecolor="black", linewidth=0.7)
+            for part in ("whiskers", "caps"):
+                for line in bp[part]:
+                    line.set(color="black", linewidth=0.7)
+            for line in bp["medians"]:
+                line.set(color="black", linewidth=0.9)
+            drawn = True
+            if verbose:
+                xi = (f"  <xi> {npz['xi'][m].mean():.3f}" if "xi" in npz.files
+                      else "")
+                print(f"  w{window} {lipid:5s} {ff:8s} part {k + 1}: "
+                      f"n={vals.size:3d}  median {np.median(vals):5.1f}  "
+                      f"mean {vals.mean():6.2f}{xi}")
+    ax.set_xticks(range(1, N_PARTS + 1))
+    ax.set_xlim(0.5, N_PARTS + 0.5)
+    ax.set_xlabel("sub-window")
+    ax.set_title(lipid)
+    return drawn
+
+
+def draw_water_vs_barrier_all(ax, key=COUNT_KEY, connect=True, ms=7,
+                              data=None, verbose=False):
+    """All five sub-windows on one axes: umbrella23 count vs partial barrier.
+
+    Colour = the force field's light->dark ramp by sub-window (early light),
+    marker = lipid.  ``connect`` joins each system's five points in time order
+    with a thin line in the force field's base colour, so the drift of one
+    system reads as a path.
+    """
+    for ff, _, colour in FORCEFIELDS:
+        for lipid in LIPIDS:
+            npz = w23_counts(ff, lipid, data)
+            if npz is None:
+                continue
+            pts = []
+            for k, sw in enumerate(subwindows(ff, lipid, data)):
+                g = part_barrier(ff, lipid, k + 1, data)
+                if sw is None or g is None:
+                    continue
+                w, _, n = slice_mean(npz, *sw, key=key)
+                if n:
+                    pts.append((k, w, g))
+            if not pts:
+                continue
+            pts = np.array(pts)
+            if connect:
+                ax.plot(pts[:, 1], pts[:, 2], color=colour, lw=0.6, alpha=0.5,
+                        zorder=1)
+            for k, w, g in pts:
+                ax.plot(w, g, ls="none", marker=LIPID_MARKERS[lipid],
+                        color=CMAPS[ff](SHADES[int(k)]), mec="black", mew=0.4,
+                        ms=ms, zorder=2)
+            if verbose:
+                print(f"  {lipid:5s} {ff:8s} count {pts[:, 1].min():5.1f}-"
+                      f"{pts[:, 1].max():5.1f}  barrier {pts[:, 2].min():5.1f}-"
+                      f"{pts[:, 2].max():5.1f}")
+    ax.set_xlabel(COUNT_LABELS.get(key, key))
+    ax.set_ylabel(r"pore barrier (kJ mol$^{-1}$)")

@@ -278,7 +278,7 @@ def draw_vs_barrier(ax, prop, rows=None, verbose=False):
 
 # Grouping for ``group_fits``: AMBER's d_HC-vs-barrier points sit visibly off
 # the CHARMM/SLipids trend, so the two are fitted separately.
-FIT_GROUPS = [("CHARMM+SLipids", ["charmm", "slipids"]), ("AMBER", ["amber"])]
+FIT_GROUPS = [("CHARMM+SLipids", ["charmm", "slipids"]), ("Lipid21", ["amber"])]
 
 
 def _points(prop, ffs, rows):
